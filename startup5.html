@@ -1,0 +1,53 @@
+<!DOCTYPE HTML>
+<html>
+<body onload="test()">
+<script>
+
+function test() {
+    var t = (new Date()).getTime();
+    console.log("TIME " + t + "\n");
+
+    var h = getQueryStringValue("start");
+    
+    // Calculate elapsed time
+    var elapsed = (t - parseInt(h));
+
+    console.log("ELAPSED:" + elapsed + "\n");
+    document.write("<div><b>ELAPSED:" + elapsed + "</b></div>");
+    sendresults(elapsed);
+
+    console.log("-----------\n");
+    console.log("KILL\n");
+}
+
+/* If key not found returns 'notfound' which will fail in nice
+   interesting ways so that it's hopefully visible */
+function getQueryStringValue(key) {
+    var query = window.location.search.substring(1);
+    var pairs = query.split("&");
+    
+    for(var i=0; i < pairs.length; i++) {
+        p = pairs[i].split("=");
+        if (p[0] == key)
+            return p[1];
+    }
+    return 'notfound';
+}
+
+function sendresults(result) {
+    var serverIP = getQueryStringValue("ip");
+    var phoneID = getQueryStringValue("phone");
+    var browserID = getQueryStringValue("browser");
+    var testID = getQueryStringValue("test");
+    var url = "http://" + serverIP + 
+              "/api/tsresults/?data=" + result +
+              "&phone=" + phoneID +
+              "&browser=" + browserID +
+              "&test=" + testID;
+    var xhr = XMLHttpRequest();
+    xhr.open("GET", url, true);
+    xhr.send();
+}
+</script>
+</body>
+</html>

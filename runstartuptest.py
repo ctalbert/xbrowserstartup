@@ -91,6 +91,10 @@ class StartupOptions(optparse.OptionParser):
                         help="Whether to do 'cold' or 'warm' startup test, defaults to cold")
         defaults["runtype"] = ["cold"]
         
+        self.add_option("--iterations", action="store", type="int", dest="iterations",
+                        help="Number of times to run a specific test/browser pair - defaults to 10")
+        defaults["iterations"] = 10
+
         self.set_defaults(**defaults)
         
         usage = """\
@@ -150,6 +154,11 @@ be running."""
             options["daemon-mode"] = False
         else:
             options["daemon-mode"] = True
+        
+        if not options["iterations"]:
+            options["iterations"] = 10
+        else:
+            options["iterations"] = int(options["iterations"])
 
         print "DBG: options are: %s" % options
         return options
@@ -186,6 +195,7 @@ class StartupTest:
         self.phoneid = options["phoneid"]
         self.htmldir = options["htmldir"]
         self.runtype = options["runtype"]
+        self.iterations = options["iterations"]
         
         if options["urls"]:
             self.urls = options["urls"]
@@ -242,33 +252,34 @@ class StartupTest:
         
         for browser, app in self.apps.iteritems():
             for testname, url in self.urls.iteritems():
-                if 'local' in testname:
-                    # Then add in testroot as the server location in URL
-                    u = url % (self.testroot, self.serverip, self.phoneid, testname, browser)
-                else:
-                    # Then add in the server twice (once for URL, once for param)
-                    u = url % (self.serverip, self.serverip, self.phoneid, testname, browser)
-                 
-                #out = self._run_adb("shell", ["sh %s %s %s" % (phonescript, app, u)], inshell=True)
-                #out = self._run_adb("shell", ["sh", phonescript, app, u])
-                cmd = ["sh", phonescript, app, u]
-                self.dm.launchProcess(cmd)
+                for i in range(self.iterations):
+                    if 'local' in testname:
+                        # Then add in testroot as the server location in URL
+                        u = url % (self.testroot, self.serverip, self.phoneid, testname, browser)
+                    else:
+                        # Then add in the server twice (once for URL, once for param)
+                        u = url % (self.serverip, self.serverip, self.phoneid, testname, browser)
+                     
+                    #out = self._run_adb("shell", ["sh %s %s %s" % (phonescript, app, u)], inshell=True)
+                    #out = self._run_adb("shell", ["sh", phonescript, app, u])
+                    cmd = ["sh", phonescript, app, u]
+                    self.dm.launchProcess(cmd)
 
-                # Give the html 5s to upload results
-                sleep(5)
-                print "Time up"
+                    # Give the html 5s to upload results
+                    sleep(5)
+                    print "Time up"
 
-                if runtype == "cold":
-                    # reboot the device between runs
-                    print "Rebooting device"
-                    nettools = NetworkTools()
-                    self.dm.reboot(nettools.getLanIp())
-                    print "ok, done with reboot"
-                else:
-                    print "Killing app"
-                    # Then we do a warm startup, killing the process between runs
-                    # The name of the process is to the left of the / in the activity manager string
-                    self.dm.killProcess(app.split("/")[0])
+                    if runtype == "cold":
+                        # reboot the device between runs
+                        print "Rebooting device"
+                        nettools = NetworkTools()
+                        self.dm.reboot(nettools.getLanIp())
+                        print "ok, done with reboot"
+                    else:
+                        print "Killing app"
+                        # Then we do a warm startup, killing the process between runs
+                        # The name of the process is to the left of the / in the activity manager string
+                        self.dm.killProcess(app.split("/")[0])
     
     # cmd must be an array!
     def _run_adb(self, adbcmd, cmd, inshell=False):

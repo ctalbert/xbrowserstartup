@@ -78,11 +78,6 @@ including Native Fennec (if not running in daemon mode).
         else:
             options["runtype"] = options["runtype"].split(",")
 
-        if not options["daemon-mode"]:
-            options["daemon-mode"] = False
-        else:
-            options["daemon-mode"] = True
-
         if not options["iterations"]:
             options["iterations"] = 10
         else:
@@ -111,6 +106,10 @@ including Native Fennec (if not running in daemon mode).
         else:
             # Ensure no spaces in phone ID
             options["phoneid"] = options["phoneid"].replace(" ","_")
+        
+        if not options["androidver"]:
+            print "You need to input an android version"
+            sys.exit(1)
 
         if not options["sdk"]:
             print "Config file must specify the path to the android sdk"
@@ -137,6 +136,8 @@ class StartupTest:
         self.runtype = options["runtype"]
         self.iterations = options["iterations"]
         self.runtype = options["runtype"]
+        self.revision = options["revision"]
+        self.androidver = options["androidver"]
 
         if options["urls"]:
             self.urls = options["urls"]
@@ -201,10 +202,10 @@ class StartupTest:
                     for i in range(self.iterations):
                         if 'local' in testname:
                             # Then add in testroot as the server location in URL
-                            u = url % (self.testroot, self.resultsip, self.phoneid, testname, browser)
+                            u = url % (self.testroot, self.resultsip, self.phoneid, testname, browser, self.androidver, self.revision)
                         else:
                             # Then add in the webserver as the URL
-                            u = url % (self.webserverip, self.resultsip, self.phoneid, testname, browser)
+                            u = url % (self.webserverip, self.resultsip, self.phoneid, testname, browser, self.androidver, self.revision)
 
                         cmd = ["sh", phonescript, app, u]
                         self.dm.launchProcess(cmd)

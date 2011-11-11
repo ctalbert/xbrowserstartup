@@ -1080,8 +1080,8 @@ function test() {
 
     console.log("ELAPSED:" + elapsed + "\n");
     document.write("<div><b>ELAPSED:" + elapsed + "</b></div>");
-    // Figure out what to send where
-    //sendresults(elapsed);
+
+    sendresults(elapsed);
 
     console.log("-----------\n");
     console.log("KILL\n");
@@ -1106,14 +1106,69 @@ function sendresults(result) {
     var phoneID = getQueryStringValue("phone");
     var browserID = getQueryStringValue("browser");
     var testID = getQueryStringValue("test");
-    var url = "http://" + serverIP + 
-              "/api/tsresults/?data=" + result +
-              "&phone=" + phoneID +
-              "&browser=" + browserID +
-              "&test=" + testID;
+    var revID = getQueryStringValue("revision");
+    var androidver = getQueryStringValue("androidver");
+    var json = makeJSON(revID, androidver, phoneID, browserID, testID, result);
+    var url = "http://" + serverIP;
     var xhr = XMLHttpRequest();
-    xhr.open("GET", url, true);
-    xhr.send();
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader("Content-type", "application/json");
+    xhr.send(JSON.stringify(json));
+}
+
+function makeJSON(revid, androidver, phoneid, browserid, testid, result) {
+    var d = new Date();
+    var date = d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
+    var json = {
+                "testsuites": [
+                {
+                    "testsuite": "xbrowserstartup",
+                    "testfailures": [],
+                    "failed": 0,
+                    "testgroup_id":null,
+                    "perfdata": [
+                    {
+                        "test": testid,
+                        "perfdata": [
+                           {
+                              "type": testid + '-startup',
+                              "browser": browserid,
+                              "phone": phoneid,
+                              "result": result
+                           }
+                        ]
+                    }
+                    ],
+                    "elapsedtime": null,
+                    "cmdline": null,
+                    "passed":1,
+                    "todo":0
+                }
+                ],
+                "index": "xbrowserstartup",
+                "testgroup": {
+                    "harness": "xbrowserstartup",
+                    "machine": phoneid,
+                    "platform": "android",
+                    "version": null,
+                    "branch": null,
+                    "frameworkfailures": null,
+                    "pending": false,
+                    "revision": revid,
+                    "buildtype": "opt",
+                    "date": date,
+                    "testrun": testid,
+                    "logurl": null,
+                    "testgroup": "xbrowserstartup",
+                    "builder": null,
+                    "productname": browserid,
+                    "buildurl": null,
+                    "os": androidver,
+                    "tree": null,
+                    "buildid": null
+                }
+            };
+    return json;
 }
 </script>
     

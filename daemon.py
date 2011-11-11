@@ -2,12 +2,15 @@ import socket
 import sys, os
 import threading
 from time import sleep
+from datetime import datetime, timedelta
 from optparse import OptionParser
 import ConfigParser
 import urlparse
 import SocketServer
 import re
 import urllib2
+import traceback
+import uuid
 from pulsebuildmonitor import start_pulse_monitor
 import devicemanager, devicemanagerSUT
 from devicemanager import NetworkTools
@@ -35,10 +38,8 @@ class CmdTCPHandler(SocketServer.BaseRequestHandler):
             self.request.send('>')
             data = self.request.recv(1024)
             if (data):
-                print "DEBUG: Got data back: " + str(data)
                 data = data.strip()
             else: 
-                print "DEBUG: Got no data back: " + str(data)
                 data = ''
 
 class Daemon():
@@ -46,6 +47,9 @@ class Daemon():
         self._stop = False
         self._cache = cachefile
         self._phonemap = {}
+        self._testrunning = False
+        self._lasttest = datetime.now()
+
         if not os.path.exists(self._cache):
             # If we don't have a cache you aren't restarting
             is_restarting = False
@@ -60,11 +64,11 @@ class Daemon():
             self.read_cache()
             self.reset_phones()
   
-        # Start our pulse listener for the nightly builds
+        # Start our pulse listener for the birch builds
         self.pulsemonitor = start_pulse_monitor(buildCallback=self.on_build,
-                                                tree=['birch'],
-                                                platform="android",
-                                                mobile=True,
+                                                tree=["birch"],
+                                                platform=["linux-android"],
+                                                mobile=False,
                                                 buildtype="opt"
                                                )
 
@@ -80,7 +84,16 @@ class Daemon():
         try:
             while (not self._stop):
                 sleep(10)
-                self.on_build("hi")
+                # Run the tests if it's been more than three hours since the last run.
+                if (not self._testrunning and
+                   (datetime.now() - self._lasttest) > timedelta(seconds=10800)):
+                    self._start_tests()
+
+                    self.run_tests()
+
+                    self._end_tests()
+                    self._lasttest = datetime.now()
+                
         except KeyboardInterrupt:
             self.server.shutdown()
 
@@ -102,6 +115,11 @@ class Daemon():
         return False
     
     def register_device(self, data):
+        # Do not accept registrations when running tests - nothing wrong with it,
+        # but it keeps things simpler this way, less chance for things to go wrong.
+        if self._testrunning:
+            return
+        
         # Eat register command
         data = data.lstrip("register ")
         
@@ -182,11 +200,23 @@ class Daemon():
         print "---------- BUILD FOUND ----------"
         print "%s" % msg
         print "---------------------------------"
-        url = "ftp://ftp.mozilla.org/pub/mozilla.org/mobile/nightly/latest-birch-android/fennec-10.0a1.en-US.android-arm.apk"
-        #self.uninstall_build()
-        self.install_build(url)
-        self.run_tests()
-            
+
+        # If we get a build during a test, we don't really care, so we skip it.
+        if self._testrunning:
+            return
+
+        # We will get a msg on busted builds with no URLs, so just ignore
+        # those, and only run the ones with real URLs
+        if "buildurl" in msg:
+            url = msg["buildurl"]
+            self._start_tests()
+
+            self.install_build(url)
+            self.run_tests()
+
+            self._end_tests()
+            self._lasttest = datetime.now()
+
     def install_build(self, url):
         # First, you download
         try:
@@ -221,26 +251,65 @@ class Daemon():
         # TODO: We can make this configurable by reading in a list of
         #       test classes that will conform to this pattern
         # Need a way to figure out how to do the imports though
-        import runstartuptest
         
-        for k,v in self._phonemap.iteritems():
-            print "*!*!*!*!*! Running startup test on %s:%s *!*!*!*!*!" % (k, v["name"])
+        # We also must not allow two threads to try to run tests at the same time.
+        # Lock it down.
+        lock = threading.RLock()
+        lock.acquire()
+        revisionguid = uuid.uuid1()
+        try:
+        
+            import runstartuptest
+        
+            for k,v in self._phonemap.iteritems():
+                print "*!*!*!*!*! Running startup test on %s:%s *!*!*!*!*!" % (k, v["name"])
 
-            # Configure it
-            opts = {"configfile": v["name"] + ".ini"}
-            testopts = runstartuptest.StartupOptions()
-            opts = testopts.verify_options(opts)
-            dm = devicemanagerSUT.DeviceManagerSUT(v["ip"], v["port"])
+                # Configure it
+                # Add in a revision ID into our config file for this test run
+                cfile = v["name"] + ".ini"
+                cfg = ConfigParser.RawConfigParser()
+                cfg.read(cfile)
+                cfg.set("options", "revision", revisionguid)
+                cfg.write(open(cfile, 'w'))
+            
+                opts = {"configfile": cfile}
+                testopts = runstartuptest.StartupOptions()
+                opts = testopts.verify_options(opts)
+                dm = devicemanagerSUT.DeviceManagerSUT(v["ip"], v["port"])
                 
-            # Run it
-            t = runstartuptest.StartupTest(dm, opts)
-            t.prepare_phone()
-            t.run()
-       
-        
+                # Run it
+                t = runstartuptest.StartupTest(dm, opts)
+                t.prepare_phone()
+                t.run()
+        except:
+            t, v, tb = sys.exc_info()
+            print "Test Run threw exception: %s %s" % (t,v)
+            traceback.print_exception(t,v,tb)
+        finally:
+            lock.release()
+
     def stop(self):
         self._stop = True
         self.server.shutdown()
+    
+    def _start_tests(self):
+        # A poor man's flag to keep phones from registering while we run tests
+        # TODO: Use a real one?
+        lock = threading.RLock()
+        lock.acquire()
+        try:
+            self._testrunning = True
+        finally:
+            lock.release()
+            
+    def _end_tests(self):
+        lock = threading.RLock()
+        lock.acquire()
+        try:
+            self._testrunning = False
+        finally:
+            lock.release()
+        
 
 def main(is_restarting, cachefile, port):
     global gDaemon

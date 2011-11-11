@@ -1,3 +1,78 @@
 This is a cross browser startup test framework.
 
-More to come here soon
+Installation
+
+There are two ways to run this utility.
+
+= By Hand =
+You can fill out the config file for your phone and then run
+performance tests on that phone.  Each test will display
+the startup performance value briefly (this timeout is in
+runstartuptest.py and can be extended - defaults to 5s).
+
+The instructions for installing are a subset of the automated
+install instructions.
+
+= Automated =
+You can run this automatically.  You need to create a config file for each phone.  Follow all the steps below.
+
+= Common Steps =
+1. Clone this repo into xbrowserstartup
+2. Get devicemanager.py, devicemanagerSUT.py and devicemanagerADB.py from a mozilla tree: http://hg.mozilla.org/mozilla-central/file/1374294a6119/build/mobile and put them in
+the xbrowserstartup directory
+3. Copy config.ini and modify it for your phone.  See examples
+for samsung galaxy etc that are in the tree.
+4. Root your phone.
+5. Install SUTAgent and Watcher onto the phone. You can get these here: http://people.mozilla.org/~bmoss/SUTAgent
+6. Install all the browsers you want to test on the phone, and
+be certain their intents are properly documented in the config file
+7. Ensure that the file paths in agcc point to your Android NDK and
+SDK
+8. ./agcc time.c to build the time exectuable
+9. Set up a webserver on your box and ensure the webserver URL in the 
+config file points at the IP address for your box.
+10. Copy the startup5.html file and the favorites2.html file to the root
+of your webserver.
+
+If you're just running it by hand, you can run it: python runstartuptest.py --config-file=<yourconfig.ini>
+
+= Full Automation Steps =
+Do all the steps above and then continue with:
+(I usually install the pulse subsystem outside the xbrowserstartup
+directory)
+== Install pulse subsystem =
+1. hg clone http://hg.mozilla.org/users/clegnitto_mozilla.com/mozillapulse/
+2. cd mozillapulse
+3. python setup.py install
+4. hg clone http://hg.mozilla.org/automation/pulsebuildmonitor/
+5. cd pulsebuildmonitor
+6. python setup.py install
+
+== Setting up Agent for Daemonization ==
+1. Edit the SUTAgent.ini file in the local directory to point to
+the machine where the daemon will be running (that's the IP address).
+2. Ensure that the HARDWARE option is set to the name of the config file for
+the phone in question (without the .ini part).
+3. Use the publishAgentIni.py script to publish your SUTAgent.ini file to
+your phones.  Each phone must have an SUTAgent.ini file.
+4. Now when the phone reboots or the agent restarts, it will attempt to
+communicate to the daemon.
+
+== Running ==
+For full automation, run:
+python daemon.py
+
+This will generate a daemon_cache.ini file that you may want to 
+keep around when restarting the system. If you have to take the
+daemon down, but the phones are still running, then you can
+restart the system and have it automatically re-register its
+known phones by running:
+python daemon.py --restarting
+
+If you have shut down the daemon and you restart it with:
+python daemon.py
+then it will destroy the cache and all phones will have to
+re-register themselves with the daemon (by restarting their SUTAgents).
+
+
+

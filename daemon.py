@@ -86,7 +86,7 @@ class Daemon():
                 sleep(10)
                 # Run the tests if it's been more than three hours since the last run.
                 if (not self._testrunning and
-                   (datetime.now() - self._lasttest) > timedelta(seconds=10800)):
+                   (datetime.now() - self._lasttest) > timedelta(seconds=3600)):
                     self._start_tests()
 
                     self.run_tests()
@@ -203,6 +203,7 @@ class Daemon():
 
         # If we get a build during a test, we don't really care, so we skip it.
         if self._testrunning:
+            print "Test running, skipping build"
             return
 
         # We will get a msg on busted builds with no URLs, so just ignore
@@ -286,6 +287,8 @@ class Daemon():
             print "Test Run threw exception: %s %s" % (t,v)
             traceback.print_exception(t,v,tb)
         finally:
+            # Reboot the phones
+            self.reset_phones()
             lock.release()
 
     def stop(self):

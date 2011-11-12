@@ -1,10 +1,10 @@
-from devicemanager import DeviceManager
+from devicemanagerSUT import DeviceManagerSUT
 from optparse import OptionParser
 import sys
 import os
 
 def main(ip, port, filename):
-  dm = DeviceManager(ip, port)
+  dm = DeviceManagerSUT(ip, port)
   dm.pushFile(filename, '/data/data/com.mozilla.SUTAgentAndroid/files/SUTAgent.ini')
 
 parser = OptionParser()

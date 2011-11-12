@@ -43,11 +43,11 @@ function sendresults(result) {
     var revID = getQueryStringValue("revision");
     var androidver = getQueryStringValue("androidver");
     var json = makeJSON(revID, androidver, phoneID, browserID, testID, result);
-    var url = "http://" + serverIP;
-    var xhr = XMLHttpRequest();
-    xhr.open("POST", url, true);
-    xhr.setRequestHeader("Content-type", "application/json");
-    xhr.send(JSON.stringify(json));
+    var url = "http://" + serverIP + "?data=" + encodeURIComponent(JSON.stringify(json));
+    
+    // This hack is courtesy of BYK, our own personal A*team life saver.
+    var e = new Image();
+    e.src = url;
 }
 
 function makeJSON(revid, androidver, phoneid, browserid, testid, result) {
@@ -104,7 +104,6 @@ function makeJSON(revid, androidver, phoneid, browserid, testid, result) {
             };
     return json;
 }
-
 </script>
 </body>
 </html>

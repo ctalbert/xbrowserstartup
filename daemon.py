@@ -47,8 +47,10 @@ class Daemon():
         self._stop = False
         self._cache = cachefile
         self._phonemap = {}
-        self._testrunning = False
+        #TODO: might not need this. self._testrunning = False
         self._lasttest = datetime.now()
+        self._lock = threading.RLock()
+        self._cachelock = threading.RLock()
 
         if not os.path.exists(self._cache):
             # If we don't have a cache you aren't restarting
@@ -84,18 +86,28 @@ class Daemon():
         try:
             while (not self._stop):
                 sleep(10)
-                # Run the tests if it's been more than three hours since the last run.
+                # Run the tests if it's been more than four hours since the last run.
+                # lock_and_run_tests will reset our _lasttest variable
                 if (not self._testrunning and
-                   (datetime.now() - self._lasttest) > timedelta(seconds=3600)):
-                    self._start_tests()
+                   (datetime.now() - self._lasttest) > timedelta(seconds=14400)):
+                    self.lock_and_run_tests()
 
-                    self.run_tests()
-
-                    self._end_tests()
-                    self._lasttest = datetime.now()
-                
         except KeyboardInterrupt:
             self.server.shutdown()
+
+    # This runs the tests and resets the self._lasttest variable.
+    # It also can install a new build, to install, set build_url to the URL of the
+    # build to download and install
+    def lock_and_run_tests(self, build_url=None):
+        try:
+            self._lock.acquire()
+            if build_url:
+                self.install_build(build_url)
+            self.run_tests()
+        except:
+            print "Exception: %s %s" % sys.exc_info()[:2]
+        finally:
+            self._lock.release()
 
     def route_cmd(self, conn, data):
         regdeviceRE = re.compile('register.*')
@@ -117,8 +129,8 @@ class Daemon():
     def register_device(self, data):
         # Do not accept registrations when running tests - nothing wrong with it,
         # but it keeps things simpler this way, less chance for things to go wrong.
-        if self._testrunning:
-            return
+        #TODO: needed? if self._testrunning:
+        #    return
         
         # Eat register command
         data = data.lstrip("register ")
@@ -129,8 +141,7 @@ class Daemon():
         print "Registering phone: %s" % data
         
         # Lock down so we write to cache safely
-        lock = threading.RLock()
-        lock.acquire()
+        self._cachelock.acquire()
         try:
             # Map MAC Address to ip and user name for phone
             # Even if a known phone is re-registering, just overwrite its record
@@ -155,13 +166,12 @@ class Daemon():
             print "Exception: %s %s" % sys.exc_info()[:2]
             self.stop()
         finally:
-            lock.release()
+            self._cachelock.release()
 
     def read_cache(self):
         print "reading cache: %s" % self._cache
         # Being a little paranoid
-        lock = threading.RLock()
-        lock.acquire()
+        self._cachelock.acquire()
         try:
             self._phonemap.clear()
             cfg = ConfigParser.RawConfigParser()
@@ -180,7 +190,7 @@ class Daemon():
             else:
                 sys.exit(1)
         finally:
-            lock.release()
+            self._cachelock.release()
     
     def reset_phones(self):
         nt = NetworkTools()
@@ -201,22 +211,11 @@ class Daemon():
         print "%s" % msg
         print "---------------------------------"
 
-        # If we get a build during a test, we don't really care, so we skip it.
-        if self._testrunning:
-            print "Test running, skipping build"
-            return
-
         # We will get a msg on busted builds with no URLs, so just ignore
         # those, and only run the ones with real URLs
         if "buildurl" in msg:
             url = msg["buildurl"]
-            self._start_tests()
-
-            self.install_build(url)
-            self.run_tests()
-
-            self._end_tests()
-            self._lasttest = datetime.now()
+            self.lock_and_run_tests(build_url=url)
 
     def install_build(self, url):
         # First, you download
@@ -252,16 +251,12 @@ class Daemon():
         # TODO: We can make this configurable by reading in a list of
         #       test classes that will conform to this pattern
         # Need a way to figure out how to do the imports though
-        
-        # We also must not allow two threads to try to run tests at the same time.
-        # Lock it down.
-        lock = threading.RLock()
-        lock.acquire()
+
         revisionguid = uuid.uuid1()
         try:
-        
+
             import runstartuptest
-        
+
             for k,v in self._phonemap.iteritems():
                 print "*!*!*!*!*! Running startup test on %s:%s *!*!*!*!*!" % (k, v["name"])
 
@@ -289,30 +284,10 @@ class Daemon():
         finally:
             # Reboot the phones
             self.reset_phones()
-            lock.release()
 
     def stop(self):
         self._stop = True
         self.server.shutdown()
-    
-    def _start_tests(self):
-        # A poor man's flag to keep phones from registering while we run tests
-        # TODO: Use a real one?
-        lock = threading.RLock()
-        lock.acquire()
-        try:
-            self._testrunning = True
-        finally:
-            lock.release()
-            
-    def _end_tests(self):
-        lock = threading.RLock()
-        lock.acquire()
-        try:
-            self._testrunning = False
-        finally:
-            lock.release()
-        
 
 def main(is_restarting, cachefile, port):
     global gDaemon

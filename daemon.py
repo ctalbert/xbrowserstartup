@@ -48,7 +48,7 @@ class Daemon():
         self._cache = cachefile
         self._phonemap = {}
         #TODO: might not need this. self._testrunning = False
-        self._lasttest = datetime.now()
+        self._lasttest = datetime(2011, 10, 22)
         self._lock = threading.RLock()
         self._cachelock = threading.RLock()
 
@@ -67,12 +67,14 @@ class Daemon():
             self.reset_phones()
   
         # Start our pulse listener for the birch builds
-        self.pulsemonitor = start_pulse_monitor(buildCallback=self.on_build,
-                                                tree=["birch"],
-                                                platform=["linux-android"],
-                                                mobile=False,
-                                                buildtype="opt"
-                                               )
+        # TODO: Causing deadlocks, moving out of process...
+        # In the meantime, pick up builds from the check_for_build method
+        #self.pulsemonitor = start_pulse_monitor(buildCallback=self.on_build,
+        #                                        tree=["birch"],
+        #                                        platform=["linux-android"],
+        #                                        mobile=False,
+        #                                        buildtype="opt"
+        #                                       )
 
         nettools = NetworkTools()
         ip = nettools.getLanIp()
@@ -86,10 +88,9 @@ class Daemon():
         try:
             while (not self._stop):
                 sleep(10)
-                # Run the tests if it's been more than four hours since the last run.
+                # Run the tests if it's been more than two hours since the last run.
                 # lock_and_run_tests will reset our _lasttest variable
-                if (not self._testrunning and
-                   (datetime.now() - self._lasttest) > timedelta(seconds=14400)):
+                if (datetime.now() - self._lasttest) > timedelta(seconds=7200):
                     self.lock_and_run_tests()
 
         except KeyboardInterrupt:
@@ -101,6 +102,7 @@ class Daemon():
     def lock_and_run_tests(self, build_url=None):
         try:
             self._lock.acquire()
+            build_url = self.check_for_build()
             if build_url:
                 self.install_build(build_url)
             self.run_tests()
@@ -108,6 +110,27 @@ class Daemon():
             print "Exception: %s %s" % sys.exc_info()[:2]
         finally:
             self._lock.release()
+            self._lasttest = datetime.now()
+
+    def check_for_build(self):
+        # Work around to keep us working until we can debug pulse issue
+        # It has some terrible hardcoded magic, don't look
+        # Depends on a file called builds.ini to get the URL and
+        # to track whether that build was installed or not.
+        try:
+            cfg = ConfigParser.RawConfigParser()
+            cfg.read("builds.ini")
+            if cfg.has_section("builds"):
+                url = cfg.get("builds", "url")
+                isused = cfg.get("builds", "installed")
+                if isused == "0":
+                    cfg.set("builds", "installed", 1)
+                    cfg.write(open("builds.ini", "wb"))
+                    return url
+                return None
+        except:
+            print "Could not read builds.ini: %s %s" % sys.exc_info()[:2]
+        return None
 
     def route_cmd(self, conn, data):
         regdeviceRE = re.compile('register.*')

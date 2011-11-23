@@ -95,7 +95,7 @@ class Daemon():
                 sleep(10)
                 # Run the tests if it's been more than two hours since the last run.
                 # lock_and_run_tests will reset our _lasttest variable
-                if (datetime.now() - self._lasttest) > timedelta(seconds=60):
+                if (datetime.now() - self._lasttest) > timedelta(seconds=14400):
                     self.lock_and_run_tests()
 
         except KeyboardInterrupt:

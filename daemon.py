@@ -339,6 +339,7 @@ class Daemon():
         # TODO: Defaults to being very chatty
         print m
         self._logfile.write(m)
+        self._logfile.flush()
 
     def stop(self):
         self._stop = True

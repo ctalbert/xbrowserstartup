@@ -90,40 +90,40 @@ including Native Fennec (if not running in daemon mode).
             options = self.read_config(options["configfile"])
         else:
             print "You must specify a config file. See config.ini for allowable fields"
-            sys.exit(1)
+            return False
 
         if not options["resultsserver"]:
             print "Config file must specify a server IP address for result reporting"
-            sys.exit(1)
+            return False
 
         if not options["webserver"]:
             print "Config file must specify a web server to run tests against"
-            sys.exit(1)
+            return False
 
         if not options["phoneid"]:
             print "Config file must specify a phone type for result reporting"
-            sys.exit(1)
+            return False
         else:
             # Ensure no spaces in phone ID
             options["phoneid"] = options["phoneid"].replace(" ","_")
         
         if not options["androidver"]:
             print "You need to input an android version"
-            sys.exit(1)
+            return False
 
         if not options["sdk"]:
             print "Config file must specify the path to the android sdk"
-            sys.exit(1)
+            return False
         elif not os.path.exists(options["sdk"]):
             print "The android-sdk path specified in config file is incorrect"
-            sys.exit(1)
+            return False
 
         print "opts: %s" % options
         return options
 
 
 class StartupTest:
-    def __init__(self, dm, options):
+    def __init__(self, dm, options, logcallback=None):
         self.dm = dm
         self.adb = os.path.join(options["sdk"], "platform-tools", "adb")
         self.script = options["script"]
@@ -154,40 +154,54 @@ class StartupTest:
         else:
             self.htmlfiles = htmlfiles
 
+        # TODO: Probably should be a python logger
+        # This is a method that is called: log(msg, isError=False)
+        if logcallback:
+            self.log = logcallback
+        else:
+            self.log = self.backuplogger
+
+    def backuplogger(self, msg, isError=False):
+        print msg
+
     def prepare_phone(self):
+        self.log("Preparing Phone")
         try:
             # Create our testroot
             if not self.dm.mkDirs(self.testroot):
-                print "Could not create directory on phone: %s" % testroot
+                self.log("Could not create directory on phone: %s" % testroot)
             else:
-                print "Created %s" % self.testroot
+                self.log("Created %s" % self.testroot)
 
             # Copy our time script into place
             if self.dm.pushFile(self.timecmd, "/data/local/%s" % self.timecmd):
-                print "Copied time"
+                self.log("Copied time")
             else:
-                print "Failed to copy time binary"
+                self.log("Failed to copy time binary", isError=True)
 
             # Chmod our time script - it's overkill but never trust android
             self.dm.launchProcess(["chmod","777", "/data/local/%s" % self.timecmd])
-            print "chmod process launched"
+            self.log("chmod process launched")
 
             # Copy our runscript into place
             if self.dm.pushFile(self.script, self.testroot + "/%s" % self.script):
-                print "Pushed runscript to %s" % self.testroot
+                self.log("Pushed runscript to %s" % self.testroot)
             else:
-                print "Failed to push runscript to %s" % self.testroot
+                self.log("Failed to push runscript to %s" % self.testroot,
+                isError=True)
 
             # Copy our HTML files for local use into place
             for f in self.htmlfiles:
                 if self.dm.pushFile(os.path.join(self.htmldir, f), self.testroot + "/%s" % f):
-                    print "Copied htmlfile %s to %s" % (f, self.testroot)
+                    self.log("Copied htmlfile %s to %s" % (f, self.testroot))
                 else:
-                    print "Failed to copy htmlfile %s to %s" % (f, self.testroot)
+                    self.log("Failed to copy htmlfile %s to %s" % (f,self.testroot),
+                            isError=True)
 
         except Exception as e:
-            print "Failed to prepare phone due to %s" % e
-            sys.exit(1)
+            self.log("Failed to prepare phone due to %s" % e, isError=True)
+            return False
+        return True
 
     def run(self):
         # Assume the script has been pushed to the phone, set up the path for adb
@@ -198,7 +212,8 @@ class StartupTest:
                 for testname, url in self.urls.iteritems():
                     # Amend our testname to indicate our runtype
                     testname = testname + "-" + rt
-                    print "------- Running %s with test: %s ---------" % (browser, testname)
+                    self.log("Running %s with test: %s for %s iterations" %
+                            (browser, testname, self.iterations))
                     for i in range(self.iterations):
                         if 'local' in testname:
                             # Then add in testroot as the server location in URL
@@ -212,7 +227,6 @@ class StartupTest:
 
                         # Give the html 5s to upload results
                         sleep(5)
-                        print "Time up"
 
                         if rt == "cold":
                             # reboot the device between runs
@@ -221,7 +235,6 @@ class StartupTest:
                             self.dm.reboot(nettools.getLanIp())
                             print "ok, done with reboot"
                         else:
-                            print "Killing app"
                             # Then we do a warm startup, killing the process between runs
                             # The name of the process is to the left of the / in the activity manager string
                             self.dm.killProcess(app.split("/")[0])
@@ -243,16 +256,24 @@ class StartupTest:
 def main():
     parser = StartupOptions()
     options, args = parser.parse_args()
-    options = parser.verify_options(options)
+
+    # Our verify call expects options to be a real dict, so make it so
+    # TODO: Generalize if we have more arguments
+    opts = {"configfile": options.configfile}
+    opts = parser.verify_options(opts)
+
+    if not opts:
+        print "Failed to validate options ending test"
+        raise Exception('Options', 'Invalid options passed to runstartuptest')
 
     # Get our devicemanager instantiated - use the agent to synchronously reboot
     # and to exec processes on the device.
-    dm = devicemanagerSUT.DeviceManagerSUT(options["deviceip"], options["deviceport"])
+    dm = devicemanagerSUT.DeviceManagerSUT(opts["deviceip"], opts["deviceport"])
 
     # Run it
-    startuptest = StartupTest(dm, options)
-    startuptest.prepare_phone()
-    startuptest.run()
+    startuptest = StartupTest(dm, opts)
+    if startuptest.prepare_phone():
+        startuptest.run()
 
 if __name__ == '__main__':
     main()

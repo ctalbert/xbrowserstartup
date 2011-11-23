@@ -39,7 +39,7 @@ class CmdTCPHandler(SocketServer.BaseRequestHandler):
             data = self.request.recv(1024)
             if (data):
                 data = data.strip()
-            else: 
+            else:
                 data = ''
 
 class Daemon():
@@ -51,6 +51,11 @@ class Daemon():
         self._lasttest = datetime(2011, 10, 22)
         self._lock = threading.RLock()
         self._cachelock = threading.RLock()
+        # TODO: Make this configurable
+        self._logfilename = "daemon.log"
+        self._logfile = open(self._logfilename, "w")
+
+        self.log("Starting Daemon")
 
         if not os.path.exists(self._cache):
             # If we don't have a cache you aren't restarting
@@ -65,7 +70,7 @@ class Daemon():
         if is_restarting:
             self.read_cache()
             self.reset_phones()
-  
+
         # Start our pulse listener for the birch builds
         # TODO: Causing deadlocks, moving out of process...
         # In the meantime, pick up builds from the check_for_build method
@@ -78,19 +83,19 @@ class Daemon():
 
         nettools = NetworkTools()
         ip = nettools.getLanIp()
-        
+
         self.server = CmdThreadedTCPServer((ip, int(port)), CmdTCPHandler)
         server_thread = threading.Thread(target=self.server.serve_forever)
         server_thread.setDaemon(True)
         server_thread.start()
-       
+
     def msg_loop(self):
         try:
             while (not self._stop):
                 sleep(10)
                 # Run the tests if it's been more than two hours since the last run.
                 # lock_and_run_tests will reset our _lasttest variable
-                if (datetime.now() - self._lasttest) > timedelta(seconds=7200):
+                if (datetime.now() - self._lasttest) > timedelta(seconds=60):
                     self.lock_and_run_tests()
 
         except KeyboardInterrupt:
@@ -102,14 +107,16 @@ class Daemon():
     def lock_and_run_tests(self, build_url=None):
         try:
             self._lock.acquire()
+            self.log("Test Lock Acquired")
             build_url = self.check_for_build()
             if build_url:
                 self.install_build(build_url)
             self.run_tests()
         except:
-            print "Exception: %s %s" % sys.exc_info()[:2]
+            self.log("Exception: %s %s" % sys.exc_info()[:2], isError=True)
         finally:
             self._lock.release()
+            self.log("Test Lock Released")
             self._lasttest = datetime.now()
 
     def check_for_build(self):
@@ -126,45 +133,49 @@ class Daemon():
                 if isused == "0":
                     cfg.set("builds", "installed", 1)
                     cfg.write(open("builds.ini", "wb"))
+                    self.log("Installing build: %s" % url)
                     return url
                 return None
         except:
-            print "Could not read builds.ini: %s %s" % sys.exc_info()[:2]
+            self.log("Could not read builds.ini: %s %s" % sys.exc_info()[:2],
+                    isError=True)
         return None
 
     def route_cmd(self, conn, data):
         regdeviceRE = re.compile('register.*')
         data = data.lower()
         if not conn:
+            self.log("Lost Daemon connection!", isError=True)
             raise DaemonException("Lost Connection")
-        
+
         if data == 'stop':
             self.stop()
         elif regdeviceRE.match(data):
             conn.send("OK\r\n")
             self.register_device(data)
         elif data == 'quit':
+            self.log("Daemon received quit notification", isError=True)
             return True
         else:
             conn.send("Unknown command, either stop or register device\n")
         return False
-    
+
     def register_device(self, data):
         # Do not accept registrations when running tests - nothing wrong with it,
         # but it keeps things simpler this way, less chance for things to go wrong.
         #TODO: needed? if self._testrunning:
         #    return
-        
+
         # Eat register command
         data = data.lstrip("register ")
-        
+
         # Un-url encode it
         data = urlparse.parse_qs(data)
-        
-        print "Registering phone: %s" % data
-        
+
         # Lock down so we write to cache safely
         self._cachelock.acquire()
+        self.log("Obtained cachelock for registering: %s" % data)
+
         try:
             # Map MAC Address to ip and user name for phone
             # Even if a known phone is re-registering, just overwrite its record
@@ -178,7 +189,7 @@ class Daemon():
             cfg.read(self._cache)
             if not cfg.has_section("phones"):
                 cfg.add_section("phones")
-            
+
             values = "%s,%s,%s" % (self._phonemap[macaddy]['ip'],
                                    self._phonemap[macaddy]['name'],
                                    self._phonemap[macaddy]['port'])
@@ -190,11 +201,12 @@ class Daemon():
             self.stop()
         finally:
             self._cachelock.release()
+            self.log("Released cachelock")
 
     def read_cache(self):
-        print "reading cache: %s" % self._cache
         # Being a little paranoid
         self._cachelock.acquire()
+        self.log("Read_cache::cachelock acquired: %s" % self._cache)
         try:
             self._phonemap.clear()
             cfg = ConfigParser.RawConfigParser()
@@ -205,8 +217,7 @@ class Daemon():
                                         "name": vlist[1],
                                         "port": vlist[2]}
         except:
-            print "Error: Unable to rebuild cache, exiting"
-            print "Exception: %s %s" % sys.exc_info()[:2]
+            self.log("Unable to rebuild cache: %s %s" % sys.exc_info()[:2], isError=True)
             # We may not have started the server yet.
             if self.server:
                 self.stop()
@@ -214,20 +225,23 @@ class Daemon():
                 sys.exit(1)
         finally:
             self._cachelock.release()
-    
+            self.log("Read_cache::cachelock released")
+
     def reset_phones(self):
         nt = NetworkTools()
         myip = nt.getLanIp()
         for k,v in self._phonemap.iteritems():
-            print "Rebooting phone %s:%s" % (k, v["name"])
+            self.log("Rebooting %s:%s" % (k, v["name"]))
+
             try:
                 dm = devicemanagerSUT.DeviceManagerSUT(v["ip"],v["port"])
                 dm.reboot(myip)
             except:
-                print "Could not reboot phone %s:%s" % (k, v["name"])
+                self.log("COULD NOT REBOOT PHONE: %s:%s" % (k, v["name"]),
+                        isError=True)
                 # TODO: SHould it get removed from the list? Think so.
                 del self._phonemap[k]
-        
+
     def on_build(self, msg):
         # Use the msg to get the build and install it then kick off our tests
         print "---------- BUILD FOUND ----------"
@@ -249,8 +263,8 @@ class Daemon():
             f.write(apk)
             f.close()
         except:
-            print "Could not download nightly due to: %s %s" % sys.exc_info()[:2]
-            self.stop()
+            self.log("Could not download nightly due to: %s %s" % sys.exc_info()[:2],
+                    isError=True)
 
         nt = NetworkTools()
         myip = nt.getLanIp()
@@ -262,14 +276,13 @@ class Daemon():
                 dm.pushFile("fennecbld.apk", devpath)
                 dm.updateApp(devpath, processName="org.mozilla.fennec", ipAddr=myip)
             except:
-                print "Could not install latest nightly on %s:%s" % (k, v["name"])
-                print "Exception: %s %s" % sys.exc_info()[:2]
-                self.stop()
-        
+                self.log("Could not install latest nightly on %s:%s" % (k,v["name"]), isError=True)
+                self.log("Exception: %s %s" % sys.exc_info()[:2], isError=True)
+
         # If the file exists, clean it up
         if os.path.exists("fennecbld.apk"):
             os.remove("fennecbld.apk")
-    
+
     def run_tests(self):
         # TODO: We can make this configurable by reading in a list of
         #       test classes that will conform to this pattern
@@ -281,7 +294,7 @@ class Daemon():
             import runstartuptest
 
             for k,v in self._phonemap.iteritems():
-                print "*!*!*!*!*! Running startup test on %s:%s *!*!*!*!*!" % (k, v["name"])
+                self.log("*!*!*! Beginning test run on %s:%s *!*!*!"% (k, v["name"]))
 
                 # Configure it
                 # Add in a revision ID into our config file for this test run
@@ -290,26 +303,46 @@ class Daemon():
                 cfg.read(cfile)
                 cfg.set("options", "revision", revisionguid)
                 cfg.write(open(cfile, 'w'))
-            
+
                 opts = {"configfile": cfile}
                 testopts = runstartuptest.StartupOptions()
                 opts = testopts.verify_options(opts)
                 dm = devicemanagerSUT.DeviceManagerSUT(v["ip"], v["port"])
-                
+
                 # Run it
-                t = runstartuptest.StartupTest(dm, opts)
+                # TODO: At the moment, hack in support for allowing it to
+                #       log to our logging method.
+                t = runstartuptest.StartupTest(dm, opts, logcallback=self.log)
                 t.prepare_phone()
                 t.run()
         except:
             t, v, tb = sys.exc_info()
-            print "Test Run threw exception: %s %s" % (t,v)
+            self.log("Test Run threw exception: %s %s" % (t,v), isError=True)
             traceback.print_exception(t,v,tb)
         finally:
             # Reboot the phones
             self.reset_phones()
 
+    def log(self, msg, isError=False):
+        timestamp = datetime.now().isoformat("T")
+        if not self._logfile:
+            self._logfile = open(self._logfilename, "w")
+            m = "ERROR|Reopening Log File|%s\n" % timestamp
+            print m
+            self._logfile.write(m)
+
+        if isError:
+            m = "ERROR|%s|%s\n" % (msg, timestamp)
+        else:
+            m = "INFO|%s|%s\n" % (msg, timestamp)
+
+        # TODO: Defaults to being very chatty
+        print m
+        self._logfile.write(m)
+
     def stop(self):
         self._stop = True
+        self._logfile.close()
         self.server.shutdown()
 
 def main(is_restarting, cachefile, port):

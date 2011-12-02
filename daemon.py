@@ -371,7 +371,4 @@ parser.set_defaults(**defaults)
 (options, args) = parser.parse_args()
 
 if __name__ == "__main__":
-    main(options.is_restarting, options.cachefile, options.port)          
-            
-        
-   
+    main(options.is_restarting, options.cachefile, options.port) 

@@ -138,6 +138,7 @@ class StartupTest:
         self.runtype = options["runtype"]
         self.revision = options["revision"]
         self.androidver = options["androidver"]
+        self.builddate = options["builddate"]
 
         if options["urls"]:
             self.urls = options["urls"]
@@ -217,10 +218,10 @@ class StartupTest:
                     for i in range(self.iterations):
                         if 'local' in testname:
                             # Then add in testroot as the server location in URL
-                            u = url % (self.testroot, self.resultsip, self.phoneid, testname, browser, self.androidver, self.revision)
+                            u = url % (self.testroot, self.resultsip, self.phoneid, testname, browser, self.androidver, self.revision, self.builddate)
                         else:
                             # Then add in the webserver as the URL
-                            u = url % (self.webserverip, self.resultsip, self.phoneid, testname, browser, self.androidver, self.revision)
+                            u = url % (self.webserverip, self.resultsip, self.phoneid, testname, browser, self.androidver, self.revision, self.builddate)
 
                         cmd = ["sh", phonescript, app, u]
                         self.dm.launchProcess(cmd)

@@ -8,7 +8,8 @@ import ConfigParser
 import urlparse
 import SocketServer
 import re
-import urllib2
+import urllib
+import Queue
 import traceback
 import uuid
 from pulsebuildmonitor import start_pulse_monitor
@@ -43,19 +44,19 @@ class CmdTCPHandler(SocketServer.BaseRequestHandler):
                 data = ''
 
 class Daemon():
-    def __init__(self, is_restarting=False, cachefile="daemon_cache.ini", port=28001):
+    def __init__(self, is_restarting=False, cachefile="daemon_cache.ini", testconfig="test_config.ini", port=28001):
         self._stop = False
         self._cache = cachefile
         self._phonemap = {}
-        #TODO: might not need this. self._testrunning = False
         self._lasttest = datetime(2011, 10, 22)
-        self._lock = threading.RLock()
         self._cachelock = threading.RLock()
         # TODO: Make this configurable
         self._logfilename = "daemon.log"
         self._logfile = open(self._logfilename, "w")
 
         self.log("Starting Daemon")
+        # Start the queue
+        self._jobs = Queue.Queue()
 
         if not os.path.exists(self._cache):
             # If we don't have a cache you aren't restarting
@@ -72,14 +73,12 @@ class Daemon():
             self.reset_phones()
 
         # Start our pulse listener for the birch builds
-        # TODO: Causing deadlocks, moving out of process...
-        # In the meantime, pick up builds from the check_for_build method
-        #self.pulsemonitor = start_pulse_monitor(buildCallback=self.on_build,
-        #                                        tree=["birch"],
-        #                                        platform=["linux-android"],
-        #                                        mobile=False,
-        #                                        buildtype="opt"
-        #                                       )
+        self.pulsemonitor = start_pulse_monitor(buildCallback=self.on_build,
+                                                tree=["birch"],
+                                                platform=["linux-android"],
+                                                mobile=False,
+                                                buildtype="opt"
+                                               )
 
         nettools = NetworkTools()
         ip = nettools.getLanIp()
@@ -92,10 +91,8 @@ class Daemon():
     def msg_loop(self):
         try:
             while (not self._stop):
-                sleep(10)
-                # Run the tests if it's been more than two hours since the last run.
-                # lock_and_run_tests will reset our _lasttest variable
-                if (datetime.now() - self._lasttest) > timedelta(seconds=14400):
+                sleep(60)
+                while not self._jobs.empty():
                     self.lock_and_run_tests()
 
         except KeyboardInterrupt:
@@ -106,40 +103,21 @@ class Daemon():
     # build to download and install
     def lock_and_run_tests(self, build_url=None):
         try:
-            self._lock.acquire()
-            self.log("Test Lock Acquired")
-            build_url = self.check_for_build()
-            if build_url:
-                self.install_build(build_url)
-            self.run_tests()
+            job = self._jobs.get()
+            if "buildurl" in job:
+                res = self.install_build(job["phone"], job["build_url"])
+                if res:
+                    self.run_tests(job)
+                else:
+                    self.log("Failed to install: Phone:%s Build%s" % (job["phone"], job["buildurl"]),
+                             isError=True)
+            else:
+                self.run_tests(job)
         except:
             self.log("Exception: %s %s" % sys.exc_info()[:2], isError=True)
         finally:
-            self._lock.release()
+            self._jobs.task_done()
             self.log("Test Lock Released")
-            self._lasttest = datetime.now()
-
-    def check_for_build(self):
-        # Work around to keep us working until we can debug pulse issue
-        # It has some terrible hardcoded magic, don't look
-        # Depends on a file called builds.ini to get the URL and
-        # to track whether that build was installed or not.
-        try:
-            cfg = ConfigParser.RawConfigParser()
-            cfg.read("builds.ini")
-            if cfg.has_section("builds"):
-                url = cfg.get("builds", "url")
-                isused = cfg.get("builds", "installed")
-                if isused == "0":
-                    cfg.set("builds", "installed", 1)
-                    cfg.write(open("builds.ini", "wb"))
-                    self.log("Installing build: %s" % url)
-                    return url
-                return None
-        except:
-            self.log("Could not read builds.ini: %s %s" % sys.exc_info()[:2],
-                    isError=True)
-        return None
 
     def route_cmd(self, conn, data):
         regdeviceRE = re.compile('register.*')
@@ -161,11 +139,6 @@ class Daemon():
         return False
 
     def register_device(self, data):
-        # Do not accept registrations when running tests - nothing wrong with it,
-        # but it keeps things simpler this way, less chance for things to go wrong.
-        #TODO: needed? if self._testrunning:
-        #    return
-
         # Eat register command
         data = data.lstrip("register ")
 
@@ -216,6 +189,22 @@ class Daemon():
                 self._phonemap[i[0]] = {"ip": vlist[0],
                                         "name": vlist[1],
                                         "port": vlist[2]}
+            
+            # Jobs are a string of key/value pairs and have the following attributes:
+            # phone=<phonemacaddress>,buildurl=<url>,builddate=<builddate>,revision=<revision>,
+            # test=<testname>,iterations=<iterations>
+            #
+            if cfg.has_section("jobs"):
+                for i in cfg.items("jobs"):
+                    vlist = i[1].split(',')
+                    job = {}
+                    for v in vlist:
+                        k = v.split("=")
+                        # Insert the key value pairs into the dict
+                        job[k[0]] = k[1]
+                    # Insert the full job dict into the queue for processing
+                    self.log("Adding job: %s" % job)
+                    self._jobs.put_nowait(job)   
         except:
             self.log("Unable to rebuild cache: %s %s" % sys.exc_info()[:2], isError=True)
             # We may not have started the server yet.
@@ -240,88 +229,97 @@ class Daemon():
                 self.log("COULD NOT REBOOT PHONE: %s:%s" % (k, v["name"]),
                         isError=True)
                 # TODO: SHould it get removed from the list? Think so.
-                del self._phonemap[k]
+                #del self._phonemap[k]
 
     def on_build(self, msg):
         # Use the msg to get the build and install it then kick off our tests
-        print "---------- BUILD FOUND ----------"
-        print "%s" % msg
-        print "---------------------------------"
+        self.log("---------- BUILD FOUND ----------")
+        self.log("%s" % msg)
+        self.log("---------------------------------")
 
         # We will get a msg on busted builds with no URLs, so just ignore
         # those, and only run the ones with real URLs
+        # We create jobs for all the phones and push them into the queue
         if "buildurl" in msg:
-            url = msg["buildurl"]
-            self.lock_and_run_tests(build_url=url)
-
-    def install_build(self, url):
+            for k,v in self._phonemap.iteritems():
+                job = {"phone":k, "buildurl":msg["buildurl"], "builddate":msg["builddate"],
+                       "revision":msg["commit"]}
+                self._jobs.put_nowait(job)
+            
+    # Install a build on a phone
+    # phoneID: phone mac address
+    # url: url of build to download and install
+    def install_build(self, phoneID, url):
+        ret = True
         # First, you download
         try:
-            resp = urllib2.urlopen(url)
-            apk = resp.read()
-            f = open("fennecbld.apk", "wb")
-            f.write(apk)
-            f.close()
+            buildfile = os.path.abspath("fennecbld.apk")
+            urllib.urlretrieve(url, buildfile)
         except:
             self.log("Could not download nightly due to: %s %s" % sys.exc_info()[:2],
                     isError=True)
+            ret = False
 
         nt = NetworkTools()
         myip = nt.getLanIp()
 
-        for k,v in self._phonemap.iteritems():
+        if ret:
             try:
-                dm = devicemanagerSUT.DeviceManagerSUT(v["ip"], v["port"])
-                devpath = dm.getDeviceRoot() + "/fennecbld.apk"
-                dm.pushFile("fennecbld.apk", devpath)
-                dm.updateApp(devpath, processName="org.mozilla.fennec", ipAddr=myip)
+                dm = devicemanagerSUT.DeviceManagerSUT(self._phonemap[phoneID]["ip"],
+                                                       self._phonemap[phoneID]["port"])
+                devroot = dm.getDeviceRoot()
+                # If we get a real deviceroot, then we can connect to the phone
+                if devroot:
+                    devpath = devroot + "/fennecbld.apk"
+                    dm.pushFile("fennecbld.apk", devpath)
+                    dm.updateApp(devpath, processName="org.mozilla.fennec", ipAddr=myip)
             except:
                 self.log("Could not install latest nightly on %s:%s" % (k,v["name"]), isError=True)
                 self.log("Exception: %s %s" % sys.exc_info()[:2], isError=True)
+                ret = False
 
         # If the file exists, clean it up
         if os.path.exists("fennecbld.apk"):
             os.remove("fennecbld.apk")
+        return ret
 
-    def run_tests(self):
+    def run_tests(self, job):
         # TODO: We can make this configurable by reading in a list of
         #       test classes that will conform to this pattern
         # Need a way to figure out how to do the imports though
 
-        revisionguid = uuid.uuid1()
         try:
 
             import runstartuptest
+            phoneID = job["phone"]
+            phoneName = self._phonemap[phoneID]["name"]
+            self.log("*!*!*! Beginning test run on %s:%s *!*!*!"% (phoneID, phoneName))
 
-            for k,v in self._phonemap.iteritems():
-                self.log("*!*!*! Beginning test run on %s:%s *!*!*!"% (k, v["name"]))
+            # Configure it
+            # Add in a revision ID into our config file for this test run
+            cfile = phoneName + ".ini"
+            cfg = ConfigParser.RawConfigParser()
+            cfg.read(cfile)
+            cfg.set("options", "revision", job["revision"])
+            cfg.set("options", "builddate", job["builddate"])
+            cfg.write(open(cfile, 'w'))
 
-                # Configure it
-                # Add in a revision ID into our config file for this test run
-                cfile = v["name"] + ".ini"
-                cfg = ConfigParser.RawConfigParser()
-                cfg.read(cfile)
-                cfg.set("options", "revision", revisionguid)
-                cfg.write(open(cfile, 'w'))
+            opts = {"configfile": cfile}
+            testopts = runstartuptest.StartupOptions()
+            opts = testopts.verify_options(opts)
+            dm = devicemanagerSUT.DeviceManagerSUT(self._phonemap[phoneID]["ip"],
+                                                   self._phonemap[phoneID]["port"])
 
-                opts = {"configfile": cfile}
-                testopts = runstartuptest.StartupOptions()
-                opts = testopts.verify_options(opts)
-                dm = devicemanagerSUT.DeviceManagerSUT(v["ip"], v["port"])
-
-                # Run it
-                # TODO: At the moment, hack in support for allowing it to
-                #       log to our logging method.
-                t = runstartuptest.StartupTest(dm, opts, logcallback=self.log)
-                t.prepare_phone()
-                t.run()
+            # Run it
+            # TODO: At the moment, hack in support for allowing it to
+            #       log to our logging method.
+            t = runstartuptest.StartupTest(dm, opts, logcallback=self.log)
+            t.prepare_phone()
+            t.run()
         except:
             t, v, tb = sys.exc_info()
             self.log("Test Run threw exception: %s %s" % (t,v), isError=True)
             traceback.print_exception(t,v,tb)
-        finally:
-            # Reboot the phones
-            self.reset_phones()
 
     def log(self, msg, isError=False):
         timestamp = datetime.now().isoformat("T")

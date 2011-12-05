@@ -42,7 +42,8 @@ function sendresults(result) {
     var testID = getQueryStringValue("test");
     var revID = getQueryStringValue("revision");
     var androidver = getQueryStringValue("androidver");
-    var json = makeJSON(revID, androidver, phoneID, browserID, testID, result);
+    var builddate = getQueryStringValue("builddate");
+    var json = makeJSON(revID, androidver, phoneID, browserID, testID, builddate, result);
     var url = "http://" + serverIP + "?data=" + encodeURIComponent(JSON.stringify(json));
     
     // This hack is courtesy of BYK, our own personal A*team life saver.
@@ -50,9 +51,7 @@ function sendresults(result) {
     e.src = url;
 }
 
-function makeJSON(revid, androidver, phoneid, browserid, testid, result) {
-    var d = new Date();
-    var date = d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
+function makeJSON(revid, androidver, phoneid, browserid, testid, builddate, result) {
     var json = {
                 "testsuites": [
                 {
@@ -90,7 +89,7 @@ function makeJSON(revid, androidver, phoneid, browserid, testid, result) {
                     "pending": false,
                     "revision": revid,
                     "buildtype": "opt",
-                    "date": date,
+                    "date": builddate,
                     "testrun": testid,
                     "logurl": null,
                     "testgroup": "xbrowserstartup",

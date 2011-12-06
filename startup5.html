@@ -52,6 +52,11 @@ function sendresults(result) {
 }
 
 function makeJSON(revid, androidver, phoneid, browserid, testid, builddate, result) {
+    // Makes the assumption that the builddate is *seconds* since epoc.
+    // This actually the form that the ES database wants starttime in.
+    // Must make a date time that matches it though:
+    var date = new Date(builddate * 1000);
+    var reportdate = date.getFullYear() + "-" + (date.getMonth() + 1) + "-" + date.getDate();
     var json = {
                 "testsuites": [
                 {
@@ -75,7 +80,9 @@ function makeJSON(revid, androidver, phoneid, browserid, testid, builddate, resu
                     "elapsedtime": null,
                     "cmdline": null,
                     "passed":1,
-                    "todo":0
+                    "todo":0,
+                    "date":reportdate,
+                    "starttime": builddate
                 }
                 ],
                 "index": "xbrowserstartup",
@@ -89,7 +96,7 @@ function makeJSON(revid, androidver, phoneid, browserid, testid, builddate, resu
                     "pending": false,
                     "revision": revid,
                     "buildtype": "opt",
-                    "date": builddate,
+                    "date": reportdate,
                     "testrun": testid,
                     "logurl": null,
                     "testgroup": "xbrowserstartup",
@@ -98,7 +105,8 @@ function makeJSON(revid, androidver, phoneid, browserid, testid, builddate, resu
                     "buildurl": null,
                     "os": androidver,
                     "tree": null,
-                    "buildid": null
+                    "buildid": null,
+                    "starttime":builddate
                 }
             };
     return json;

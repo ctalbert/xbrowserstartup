@@ -105,7 +105,7 @@ class Daemon():
         try:
             job = self._jobs.get()
             if "buildurl" in job:
-                res = self.install_build(job["phone"], job["build_url"])
+                res = self.install_build(job["phone"], job["buildurl"])
                 if res:
                     self.run_tests(job)
                 else:

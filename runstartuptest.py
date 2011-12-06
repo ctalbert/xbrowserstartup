@@ -111,12 +111,12 @@ including Native Fennec (if not running in daemon mode).
             print "You need to input an android version"
             return False
 
-        if not options["sdk"]:
-            print "Config file must specify the path to the android sdk"
-            return False
-        elif not os.path.exists(options["sdk"]):
-            print "The android-sdk path specified in config file is incorrect"
-            return False
+        #if not options["sdk"]:
+        #    print "Config file must specify the path to the android sdk"
+        #    return False
+        #elif not os.path.exists(options["sdk"]):
+        #    print "The android-sdk path specified in config file is incorrect"
+        #    return False
 
         print "opts: %s" % options
         return options
@@ -125,7 +125,7 @@ including Native Fennec (if not running in daemon mode).
 class StartupTest:
     def __init__(self, dm, options, logcallback=None):
         self.dm = dm
-        self.adb = os.path.join(options["sdk"], "platform-tools", "adb")
+        #self.adb = os.path.join(options["sdk"], "platform-tools", "adb")
         self.script = options["script"]
         self.timecmd = options["timecmd"]
         self.testroot = options["testroot"]
@@ -223,8 +223,11 @@ class StartupTest:
                             # Then add in the webserver as the URL
                             u = url % (self.webserverip, self.resultsip, self.phoneid, testname, browser, self.androidver, self.revision, self.builddate)
 
+                        # Pass in the browser application name so that the
+                        # devicemanager knows which process to watch for
+                        appname = app.split("/")[0]
                         cmd = ["sh", phonescript, app, u]
-                        self.dm.launchProcess(cmd)
+                        self.dm.launchProcess(cmd, appnameToCheck=appname)
 
                         # Give the html 5s to upload results
                         sleep(5)

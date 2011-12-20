@@ -281,7 +281,7 @@ class Daemon():
                 else:
                     self.log("Could not get devroot for phone: %s" % phoneID, isError=True)
             except:
-                self.log("Could not install latest nightly on %s:%s" % (k,v["name"]), isError=True)
+                self.log("Could not install latest nightly on %s:%s" % (phoneID,self._phonemap[phoneID]["name"]), isError=True)
                 self.log("Exception: %s %s" % sys.exc_info()[:2], isError=True)
                 ret = False
 

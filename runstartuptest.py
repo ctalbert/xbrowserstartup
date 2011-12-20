@@ -170,7 +170,7 @@ class StartupTest:
         try:
             # Create our testroot
             if not self.dm.mkDirs(self.testroot):
-                self.log("Could not create directory on phone: %s" % testroot)
+                self.log("Could not create directory on phone: %s" % self.testroot)
             else:
                 self.log("Created %s" % self.testroot)
 
@@ -193,11 +193,14 @@ class StartupTest:
 
             # Copy our HTML files for local use into place
             for f in self.htmlfiles:
-                if self.dm.pushFile(os.path.join(self.htmldir, f), self.testroot + "/%s" % f):
-                    self.log("Copied htmlfile %s to %s" % (f, self.testroot))
+                if os.path.isdir(f):
+                    self.dm.pushDir(f, self.testroot + "/%s" % f)
                 else:
-                    self.log("Failed to copy htmlfile %s to %s" % (f,self.testroot),
-                            isError=True)
+                    if self.dm.pushFile(os.path.join(self.htmldir, f), self.testroot + "/%s" % f):
+                        self.log("Copied htmlfile %s to %s" % (f, self.testroot))
+                    else:
+                        self.log("Failed to copy htmlfile %s to %s" % (f,self.testroot),
+                                isError=True)
 
         except Exception as e:
             self.log("Failed to prepare phone due to %s" % e, isError=True)
@@ -230,7 +233,7 @@ class StartupTest:
                         self.dm.launchProcess(cmd, appnameToCheck=appname)
 
                         # Give the html 5s to upload results
-                        sleep(5)
+                        sleep(20)
 
                         if rt == "cold":
                             # reboot the device between runs

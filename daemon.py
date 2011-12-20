@@ -73,12 +73,12 @@ class Daemon():
             self.reset_phones()
 
         # Start our pulse listener for the birch builds
-        self.pulsemonitor = start_pulse_monitor(buildCallback=self.on_build,
-                                                tree=["birch"],
-                                                platform=["linux-android"],
-                                                mobile=False,
-                                                buildtype="opt"
-                                               )
+        #self.pulsemonitor = start_pulse_monitor(buildCallback=self.on_build,
+        #                                        tree=["birch"],
+        #                                        platform=["linux-android"],
+        #                                        mobile=False,
+        #                                        buildtype="opt"
+        #                                       )
 
         nettools = NetworkTools()
         ip = nettools.getLanIp()
@@ -94,6 +94,7 @@ class Daemon():
                 sleep(60)
                 while not self._jobs.empty():
                     self.lock_and_run_tests()
+                #self.log("Done with jobs")
 
         except KeyboardInterrupt:
             self.server.shutdown()
@@ -103,7 +104,9 @@ class Daemon():
     # build to download and install
     def lock_and_run_tests(self, build_url=None):
         try:
+            self.log("Asking for jobs")
             job = self._jobs.get()
+            self.log("Got job: %s" % job)
             if "buildurl" in job:
                 res = self.install_build(job["phone"], job["buildurl"])
                 if res:
@@ -253,6 +256,7 @@ class Daemon():
         ret = True
         # First, you download
         try:
+            self.log("Installing build on phone: %s from url %s" % (phoneID, url))
             buildfile = os.path.abspath("fennecbld.apk")
             urllib.urlretrieve(url, buildfile)
         except:
@@ -273,6 +277,9 @@ class Daemon():
                     devpath = devroot + "/fennecbld.apk"
                     dm.pushFile("fennecbld.apk", devpath)
                     dm.updateApp(devpath, processName="org.mozilla.fennec", ipAddr=myip)
+                    self.log("Completed update for phoneID: %s" % phoneID)
+                else:
+                    self.log("Could not get devroot for phone: %s" % phoneID, isError=True)
             except:
                 self.log("Could not install latest nightly on %s:%s" % (k,v["name"]), isError=True)
                 self.log("Exception: %s %s" % sys.exc_info()[:2], isError=True)

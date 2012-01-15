@@ -52,7 +52,7 @@ from devicemanager import DeviceManager, DMError, FileError, NetworkTools
 class DeviceManagerSUT(DeviceManager):
   host = ''
   port = 0
-  debug = 2 
+  debug = 3
   retries = 0
   tempRoot = os.getcwd()
   base_prompt = '$>'
@@ -1185,6 +1185,18 @@ class DeviceManagerSUT(DeviceManager):
 
     return True
 
+  """ Turns on adb for either ip or usb.  This persists until the next reboot
+      binding = defaults to ip, can also be specifed for usb, by passing hte usb
+      string in that parameter
+  """
+  def adb_on(self, binding="ip"):
+      if (self.debug >= 3): print "INFO: Turning on adb for %s binding" % binding
+      try:
+        self.verifySendCMD(["adb " + binding])
+      except(DMError):
+        return False
+      return True
+ 
 gCallbackData = ''
 
 class myServer(SocketServer.TCPServer):

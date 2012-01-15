@@ -111,12 +111,12 @@ including Native Fennec (if not running in daemon mode).
             print "You need to input an android version"
             return False
 
-        #if not options["sdk"]:
-        #    print "Config file must specify the path to the android sdk"
-        #    return False
-        #elif not os.path.exists(options["sdk"]):
-        #    print "The android-sdk path specified in config file is incorrect"
-        #    return False
+        if not options["sdk"]:
+            print "Config file must specify the path to the android sdk"
+            return False
+        elif not os.path.exists(options["sdk"]):
+            print "The android-sdk path specified in config file is incorrect"
+            return False
 
         print "opts: %s" % options
         return options
@@ -125,7 +125,8 @@ including Native Fennec (if not running in daemon mode).
 class StartupTest:
     def __init__(self, dm, options, logcallback=None):
         self.dm = dm
-        #self.adb = os.path.join(options["sdk"], "platform-tools", "adb")
+        self.adb = os.path.join(options["sdk"], "platform-tools", "adb")
+        self.deviceip = options["deviceip"]
         self.script = options["script"]
         self.timecmd = options["timecmd"]
         self.testroot = options["testroot"]
@@ -139,6 +140,7 @@ class StartupTest:
         self.revision = options["revision"]
         self.androidver = options["androidver"]
         self.builddate = options["builddate"]
+        self.adb_connected = False
 
         if options["urls"]:
             self.urls = options["urls"]
@@ -201,11 +203,51 @@ class StartupTest:
                     else:
                         self.log("Failed to copy htmlfile %s to %s" % (f,self.testroot),
                                 isError=True)
+            
+            # Set up adb over IP
+            if self.dm.adb_on(binding="ip"):
+                # Connect adb to the device, device defaults to port 5555
+                self._run_adb("connect", [self.deviceip])
+                self.adbserial = self.deviceip + ":5555"
+                self.adb_connected = True
+            else:
+                self.adb_connected = False
+                self.adbserial = None
+            
+            if self.adb_connected:
+                # Get the fennec profile path
+                self.fennec_profile = self.get_fennec_profile_path()
+            else:
+                self.log("ERROR: Cannot connect to adb at %s" % self.adbserial, isError=True)
 
         except Exception as e:
             self.log("Failed to prepare phone due to %s" % e, isError=True)
             return False
         return True
+
+    def get_fennec_profile_path(self):
+        if not self.adb_connected:
+            self.log("ERROR: ADB not connected, failing to get fennec profile", isError=True)
+            return None
+        self.log("Getting Fennec Profile Path")
+        self._run_adb("pull", ["/data/data/org.mozilla.fennec/files/mozilla/profiles.ini","profiles.ini"],
+                      serial=self.adbserial)
+        path = None
+        if os.path.exists("profiles.ini"):
+            cfg = ConfigParser.RawConfigParser()
+            cfg.read("profiles.ini")
+            
+            if cfg.has_section("Profile0"):
+                isrelative = cfg.get("Profile0", "IsRelative")
+                profname = cfg.get("Profile0", "Path")
+            else:
+                self.log("ERROR: Unknown profile", isError=True)
+            if isrelative == "1":
+                path = "/data/data/org.mozilla.fennec/files/mozilla/%s" % profname
+            else:
+                path = profname
+        os.remove("profiles.ini")
+        return path
 
     def run(self):
         # Assume the script has been pushed to the phone, set up the path for adb
@@ -233,7 +275,7 @@ class StartupTest:
                         self.dm.launchProcess(cmd, appnameToCheck=appname)
 
                         # Give the html 5s to upload results
-                        sleep(20)
+                        sleep(10)
 
                         if rt == "cold":
                             # reboot the device between runs
@@ -245,19 +287,33 @@ class StartupTest:
                             # Then we do a warm startup, killing the process between runs
                             # The name of the process is to the left of the / in the activity manager string
                             self.dm.killProcess(app.split("/")[0])
+                        
+                        if appname == "org.mozilla.fennec":
+                            self.log("Removing session store files from fennec")
+                            self._remove_sessionstore_files()
+
+    def _remove_sessionstore_files(self):
+        # Get the profile
+        if not self.fennec_profile:
+            self.fennec_profile = self.get_fennec_profile()
+        if self.adb_connected:
+            sessionstorepth = self.fennec_profile + "/sessionstore.js"
+            self._run_adb("shell", ["rm", sessionstorepth], serial=self.adbserial)
+            sessionstorepth = self.fennec_profile + "/sessionstore.bak"
+            self._run_adb("shell", ["rm", sessionstorepth], serial=self.adbserial)
 
     # cmd must be an array!
-    def _run_adb(self, adbcmd, cmd, inshell=False):
-        print "run adb cmd: %s" % subprocess.list2cmdline([self.adb, adbcmd] + cmd)
-        if (inshell):
-            p = subprocess.Popen([self.adb, adbcmd] + cmd,
-                                 stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT,
-                                 shell=True)
-        else:
-            p = subprocess.Popen([self.adb, adbcmd] + cmd,
+    def _run_adb(self, adbcmd, cmd, serial=None):
+        if serial:
+            self.log("adb cmd: %s" % subprocess.list2cmdline([self.adb, "-s", serial, adbcmd] + cmd))
+            p = subprocess.Popen([self.adb, "-s", serial, adbcmd] + cmd,
                                  stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT)
+        else:
+            print "run adb cmd: %s" % subprocess.list2cmdline([self.adb, adbcmd] + cmd)
+            p = subprocess.Popen([self.adb, adbcmd] + cmd,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT)
         return p.communicate()[0]
 
 def main():

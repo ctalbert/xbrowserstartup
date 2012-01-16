@@ -235,8 +235,7 @@ class StartupTest:
         self.log("Getting Fennec Profile Path")
         data = self._run_adb("shell", ["cat", "/data/data/org.mozilla.fennec/files/mozilla/profiles.ini"],
                       serial=self.adbserial)
-        import pdb
-        pdb.set_trace()
+        
         pfile = open("profiles.ini", "w")
         pfile.writelines(data.split("\r"))
         pfile.flush()

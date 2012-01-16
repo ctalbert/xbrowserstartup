@@ -141,6 +141,7 @@ class StartupTest:
         self.androidver = options["androidver"]
         self.builddate = options["builddate"]
         self.adb_connected = False
+        self.fennec_profile = None
 
         if options["urls"]:
             self.urls = options["urls"]
@@ -203,35 +204,42 @@ class StartupTest:
                     else:
                         self.log("Failed to copy htmlfile %s to %s" % (f,self.testroot),
                                 isError=True)
-            
-            # Set up adb over IP
-            if self.dm.adb_on(binding="ip"):
-                # Connect adb to the device, device defaults to port 5555
-                self._run_adb("connect", [self.deviceip])
-                self.adbserial = self.deviceip + ":5555"
-                self.adb_connected = True
-            else:
-                self.adb_connected = False
-                self.adbserial = None
-            
-            if self.adb_connected:
-                # Get the fennec profile path
-                self.fennec_profile = self.get_fennec_profile_path()
-            else:
-                self.log("ERROR: Cannot connect to adb at %s" % self.adbserial, isError=True)
+                        
+            if not self.adb_connected:
+                self._connect_adb()
 
         except Exception as e:
             self.log("Failed to prepare phone due to %s" % e, isError=True)
             return False
         return True
 
-    def get_fennec_profile_path(self):
+    def _connect_adb(self):
+        # Set up adb over IP
+        if self.dm.adb_on(binding="ip"):
+            # Connect adb to the device, device defaults to port 5555
+            self._run_adb("connect", [self.deviceip])
+            self.adbserial = self.deviceip + ":5555"
+            self.adb_connected = True
+        else:
+            self.adb_connected = False
+            self.adbserial = None
+        return self.adb_connected
+
+    def _get_fennec_profile_path(self):
         if not self.adb_connected:
-            self.log("ERROR: ADB not connected, failing to get fennec profile", isError=True)
-            return None
+            connected = self._connect_adb()
+            if not connected:
+                self.log("ERROR: ADB not connected, failing to get fennec profile", isError=True)
+                return None
+        
         self.log("Getting Fennec Profile Path")
-        self._run_adb("pull", ["/data/data/org.mozilla.fennec/files/mozilla/profiles.ini","profiles.ini"],
+        data = self._run_adb("shell", ["cat", "/data/data/org.mozilla.fennec/files/mozilla/profiles.ini"],
                       serial=self.adbserial)
+        import pdb
+        pdb.set_trace()
+        pfile = open("profiles.ini", "w")
+        pfile.writelines(data.split("\r"))
+        pfile.flush()
         path = None
         if os.path.exists("profiles.ini"):
             cfg = ConfigParser.RawConfigParser()
@@ -295,12 +303,15 @@ class StartupTest:
     def _remove_sessionstore_files(self):
         # Get the profile
         if not self.fennec_profile:
-            self.fennec_profile = self.get_fennec_profile()
-        if self.adb_connected:
+            self.fennec_profile = self._get_fennec_profile_path()
+        
+        if self.adb_connected and self.fennec_profile:
             sessionstorepth = self.fennec_profile + "/sessionstore.js"
             self._run_adb("shell", ["rm", sessionstorepth], serial=self.adbserial)
             sessionstorepth = self.fennec_profile + "/sessionstore.bak"
             self._run_adb("shell", ["rm", sessionstorepth], serial=self.adbserial)
+        else:
+            self.log("ERROR: Cannot remove sessionstore files", isError=True)
 
     # cmd must be an array!
     def _run_adb(self, adbcmd, cmd, serial=None):

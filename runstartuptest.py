@@ -217,8 +217,8 @@ class StartupTest:
         # Set up adb over IP
         if self.dm.adb_on(binding="ip"):
             # Connect adb to the device, device defaults to port 5555
-            self._run_adb("connect", [self.deviceip])
             self.adbserial = self.deviceip + ":5555"
+            self._run_adb("connect", [self.adbserial])
             self.adb_connected = True
         else:
             self.adb_connected = False

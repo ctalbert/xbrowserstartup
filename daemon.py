@@ -1,4 +1,5 @@
 import socket
+import logging
 import sys, os
 import threading
 from time import sleep
@@ -13,12 +14,11 @@ import Queue
 import traceback
 import uuid
 from pulsebuildmonitor import start_pulse_monitor
-import devicemanager, devicemanagerSUT
 from devicemanager import NetworkTools
 
 # Objects that conform to test object interface
-import runstartuptest
-
+# TODO: refactor this one: import runstartuptest
+from s1s2test import S1S2Test
 
 gDaemon = None
 
@@ -44,19 +44,22 @@ class CmdTCPHandler(SocketServer.BaseRequestHandler):
                 data = ''
 
 class Daemon():
-    def __init__(self, is_restarting=False, cachefile="daemon_cache.ini", testconfig="test_config.ini", port=28001):
+    def __init__(self, is_restarting=False, cachefile="daemon_cache.ini",
+            testconfig="test_config.ini", port=28001, logfile="daemon.log",
+            loglevel="DEBUG"):
         self._stop = False
         self._cache = cachefile
         self._phonemap = {}
-        self._lasttest = datetime(2011, 10, 22)
         self._cachelock = threading.RLock()
-        # TODO: Make this configurable
-        self._logfilename = "daemon.log"
-        self._logfile = open(self._logfilename, "w")
+        logging.basicConfig(filename=logfile,
+                            filemode="w",
+                            level=loglevel,
+                            format='%(asctime)s|%(levelname)s|%(message)s')
 
-        self.log("Starting Daemon")
+        logging.info("Starting Daemon")
         # Start the queue
         self._jobs = Queue.Queue()
+        self._phonesstarted = False
 
         if not os.path.exists(self._cache):
             # If we don't have a cache you aren't restarting
@@ -91,10 +94,9 @@ class Daemon():
     def msg_loop(self):
         try:
             while (not self._stop):
+                self.disperse_jobs()
+                self.start_phones()
                 sleep(60)
-                while not self._jobs.empty():
-                    self.lock_and_run_tests()
-                #self.log("Done with jobs")
 
         except KeyboardInterrupt:
             self.server.shutdown()
@@ -102,44 +104,58 @@ class Daemon():
     # This runs the tests and resets the self._lasttest variable.
     # It also can install a new build, to install, set build_url to the URL of the
     # build to download and install
-    def lock_and_run_tests(self, build_url=None):
+    def disperse_jobs(self):
         try:
-            self.log("Asking for jobs")
-            job = self._jobs.get()
-            self.log("Got job: %s" % job)
-            if "buildurl" in job:
-                res = self.install_build(job["phone"], job["buildurl"])
-                if res:
-                    self.run_tests(job)
-                else:
-                    self.log("Failed to install: Phone:%s Build%s" % (job["phone"], job["buildurl"]),
-                             isError=True)
-            else:
-                self.run_tests(job)
+            logging.debug("Asking for jobs")
+            while not self._jobs.empty():
+                job = self._jobs.get()
+                logging.debug("Got job: %s" % job)
+                for k,v in self._phonemap.iteritems():
+                    # TODO: Refactor so that the job can specify the test so that
+                    # then multiple types of test objects can be ran on one set of
+                    # phones.
+                    logging.debug("Adding job to phone: %s" % v["name"])
+                    v["testobj"].add_job(job)
+                self._jobs.task_done()
         except:
-            self.log("Exception: %s %s" % sys.exc_info()[:2], isError=True)
-        finally:
-            self._jobs.task_done()
-            self.log("Test Lock Released")
+            logging.error("Exception adding jobs: %s %s" % sys.exc_info()[:2])
+
+    # Start the phones for testing
+    def start_phones(self):
+        if not self._phonesstarted:
+            for k,v in self._phonemap.iteritems():
+                logging.info("Starting phone: %s" % v["name"])
+                v["testobj"].start_test()
+            self._phonesstarted = True
+
 
     def route_cmd(self, conn, data):
         regdeviceRE = re.compile('register.*')
         data = data.lower()
         if not conn:
-            self.log("Lost Daemon connection!", isError=True)
+            logging.debug("Lost Daemon connection!", isError=True)
             raise DaemonException("Lost Connection")
 
+        # TODO: Implement the get status command to get status for a particular
+        # phone
         if data == 'stop':
             self.stop()
         elif regdeviceRE.match(data):
             conn.send("OK\r\n")
             self.register_device(data)
         elif data == 'quit':
-            self.log("Daemon received quit notification", isError=True)
+            logging.debug("Daemon received quit notification", isError=True)
             return True
         else:
             conn.send("Unknown command, either stop or register device\n")
         return False
+
+    def _create_test_object(self, macaddy, phonedict):
+        t = S1S2Test(phoneid=macaddy + "_" + phonedict['name'],
+                     serial = phonedict['serial'],
+                     ip = phonedict['ip'],
+                     sutcmdport = phonedict['port'])
+        return t
 
     def register_device(self, data):
         # Eat register command
@@ -150,39 +166,49 @@ class Daemon():
 
         # Lock down so we write to cache safely
         self._cachelock.acquire()
-        self.log("Obtained cachelock for registering: %s" % data)
+        logging.debug("Obtained cachelock for registering: %s" % data)
 
         try:
             # Map MAC Address to ip and user name for phone
-            # Even if a known phone is re-registering, just overwrite its record
-            # in case its IP changed
             # The configparser does odd things with the :'s so remove them.
             macaddy = data['name'][0].replace(':', '_')
-            self._phonemap[macaddy] = {'ip': data['ipaddr'][0],
-                                       'name': data['hardware'][0],
-                                       'port': data['cmdport'][0]}
-            cfg = ConfigParser.RawConfigParser()
-            cfg.read(self._cache)
-            if not cfg.has_section("phones"):
-                cfg.add_section("phones")
 
-            values = "%s,%s,%s" % (self._phonemap[macaddy]['ip'],
-                                   self._phonemap[macaddy]['name'],
-                                   self._phonemap[macaddy]['port'])
-            cfg.set("phones", macaddy, values)
-            cfg.write(open(self._cache, 'wb'))
+            if macaddy not in self._phonemap:
+                self._phonemap[macaddy] = {'ip': data['ipaddr'][0],
+                                           'name': data['hardware'][0],
+                                           'port': data['cmdport'][0],
+                                           'serial': data['pool'][0]}
+                testobj = self._create_test_object(macaddy, self._phonemap[macaddy])
+                self._phonemap[macaddy]["testobj"] = testobj
+
+
+                cfg = ConfigParser.RawConfigParser()
+                cfg.read(self._cache)
+                if not cfg.has_section("phones"):
+                    cfg.add_section("phones")
+
+                values = "%s,%s,%s,%s" % (self._phonemap[macaddy]['ip'],
+                                          self._phonemap[macaddy]['name'],
+                                          self._phonemap[macaddy]['port'],
+                                          self._phonemap[macaddy]['serial'])
+                logging.debug("Registering new phone: %s" % values)
+                cfg.set("phones", macaddy, values)
+                cfg.write(open(self._cache, 'wb'))
+            else:
+                logging.debug("Registering known phone: %s_%s" % (data['name'],
+                        data['hardware']))
         except:
             print "ERROR: could not write cache file, exiting"
             print "Exception: %s %s" % sys.exc_info()[:2]
             self.stop()
         finally:
             self._cachelock.release()
-            self.log("Released cachelock")
+            logging.debug("Released cachelock")
 
     def read_cache(self):
         # Being a little paranoid
         self._cachelock.acquire()
-        self.log("Read_cache::cachelock acquired: %s" % self._cache)
+        logging.debug("Read_cache::cachelock acquired: %s" % self._cache)
         try:
             self._phonemap.clear()
             cfg = ConfigParser.RawConfigParser()
@@ -191,8 +217,11 @@ class Daemon():
                 vlist = i[1].split(',')
                 self._phonemap[i[0]] = {"ip": vlist[0],
                                         "name": vlist[1],
-                                        "port": vlist[2]}
-            
+                                        "port": vlist[2],
+                                        "serial": vlist[3]}
+                testobj = self._create_test_object(i[0], self._phonemap[i[0]])
+                self._phonemap[i[0]]["testobj"] = testobj
+
             # Jobs are a string of key/value pairs and have the following attributes:
             # phone=<phonemacaddress>,buildurl=<url>,builddate=<builddate>,revision=<revision>,
             # test=<testname>,iterations=<iterations>
@@ -206,10 +235,10 @@ class Daemon():
                         # Insert the key value pairs into the dict
                         job[k[0]] = k[1]
                     # Insert the full job dict into the queue for processing
-                    self.log("Adding job: %s" % job)
-                    self._jobs.put_nowait(job)   
+                    logging.info("Adding job: %s" % job)
+                    self._jobs.put_nowait(job)
         except:
-            self.log("Unable to rebuild cache: %s %s" % sys.exc_info()[:2], isError=True)
+            logging.error("Unable to rebuild cache: %s %s" % sys.exc_info()[:2])
             # We may not have started the server yet.
             if self.server:
                 self.stop()
@@ -217,28 +246,25 @@ class Daemon():
                 sys.exit(1)
         finally:
             self._cachelock.release()
-            self.log("Read_cache::cachelock released")
+            logging.debug("Read_cache::cachelock released")
 
     def reset_phones(self):
         nt = NetworkTools()
         myip = nt.getLanIp()
         for k,v in self._phonemap.iteritems():
-            self.log("Rebooting %s:%s" % (k, v["name"]))
+            logging.info("Rebooting %s:%s" % (k, v["name"]))
 
             try:
                 dm = devicemanagerSUT.DeviceManagerSUT(v["ip"],v["port"])
                 dm.reboot(myip)
             except:
-                self.log("COULD NOT REBOOT PHONE: %s:%s" % (k, v["name"]),
-                        isError=True)
-                # TODO: SHould it get removed from the list? Think so.
-                #del self._phonemap[k]
+                logging.error("COULD NOT REBOOT PHONE: %s:%s" % (k, v["name"]))
 
     def on_build(self, msg):
         # Use the msg to get the build and install it then kick off our tests
-        self.log("---------- BUILD FOUND ----------")
-        self.log("%s" % msg)
-        self.log("---------------------------------")
+        logging.debug("---------- BUILD FOUND ----------")
+        logging.debug("%s" % msg)
+        logging.debug("---------------------------------")
 
         # We will get a msg on busted builds with no URLs, so just ignore
         # those, and only run the ones with real URLs
@@ -248,47 +274,6 @@ class Daemon():
                 job = {"phone":k, "buildurl":msg["buildurl"], "builddate":msg["builddate"],
                        "revision":msg["commit"]}
                 self._jobs.put_nowait(job)
-            
-    # Install a build on a phone
-    # phoneID: phone mac address
-    # url: url of build to download and install
-    def install_build(self, phoneID, url):
-        ret = True
-        # First, you download
-        try:
-            self.log("Installing build on phone: %s from url %s" % (phoneID, url))
-            buildfile = os.path.abspath("fennecbld.apk")
-            urllib.urlretrieve(url, buildfile)
-        except:
-            self.log("Could not download nightly due to: %s %s" % sys.exc_info()[:2],
-                    isError=True)
-            ret = False
-
-        nt = NetworkTools()
-        myip = nt.getLanIp()
-
-        if ret:
-            try:
-                dm = devicemanagerSUT.DeviceManagerSUT(self._phonemap[phoneID]["ip"],
-                                                       self._phonemap[phoneID]["port"])
-                devroot = dm.getDeviceRoot()
-                # If we get a real deviceroot, then we can connect to the phone
-                if devroot:
-                    devpath = devroot + "/fennecbld.apk"
-                    dm.pushFile("fennecbld.apk", devpath)
-                    dm.updateApp(devpath, processName="org.mozilla.fennec", ipAddr=myip)
-                    self.log("Completed update for phoneID: %s" % phoneID)
-                else:
-                    self.log("Could not get devroot for phone: %s" % phoneID, isError=True)
-            except:
-                self.log("Could not install latest nightly on %s:%s" % (phoneID,self._phonemap[phoneID]["name"]), isError=True)
-                self.log("Exception: %s %s" % sys.exc_info()[:2], isError=True)
-                ret = False
-
-        # If the file exists, clean it up
-        if os.path.exists("fennecbld.apk"):
-            os.remove("fennecbld.apk")
-        return ret
 
     def run_tests(self, job):
         # TODO: We can make this configurable by reading in a list of
@@ -300,7 +285,7 @@ class Daemon():
             import runstartuptest
             phoneID = job["phone"]
             phoneName = self._phonemap[phoneID]["name"]
-            self.log("*!*!*! Beginning test run on %s:%s *!*!*!"% (phoneID, phoneName))
+            logging.debug("*!*!*! Beginning test run on %s:%s *!*!*!"% (phoneID, phoneName))
 
             # Configure it
             # Add in a revision ID into our config file for this test run
@@ -320,42 +305,25 @@ class Daemon():
             # Run it
             # TODO: At the moment, hack in support for allowing it to
             #       log to our logging method.
-            t = runstartuptest.StartupTest(dm, opts, logcallback=self.log)
+            t = runstartuptest.StartupTest(dm, opts, logcallback=logging.debug)
             t.prepare_phone()
             t.run()
         except:
             t, v, tb = sys.exc_info()
-            self.log("Test Run threw exception: %s %s" % (t,v), isError=True)
+            logging.debug("Test Run threw exception: %s %s" % (t,v), isError=True)
             traceback.print_exception(t,v,tb)
-
-    def log(self, msg, isError=False):
-        timestamp = datetime.now().isoformat("T")
-        if not self._logfile:
-            self._logfile = open(self._logfilename, "w")
-            m = "ERROR|Reopening Log File|%s\n" % timestamp
-            print m
-            self._logfile.write(m)
-
-        if isError:
-            m = "ERROR|%s|%s\n" % (msg, timestamp)
-        else:
-            m = "INFO|%s|%s\n" % (msg, timestamp)
-
-        # TODO: Defaults to being very chatty
-        print m
-        self._logfile.write(m)
-        self._logfile.flush()
 
     def stop(self):
         self._stop = True
-        self._logfile.close()
         self.server.shutdown()
 
-def main(is_restarting, cachefile, port):
+def main(is_restarting, cachefile, port, logfile, loglevel):
     global gDaemon
     gDaemon = Daemon(is_restarting=is_restarting,
                      cachefile = cachefile,
-                     port = port)
+                     port = port,
+                     logfile = logfile,
+                     loglevel = loglevel)
     gDaemon.msg_loop()
 
 defaults = {}
@@ -372,8 +340,16 @@ parser.add_option("--cache", action="store", type="string", dest="cachefile",
                   help="Cache file to use, defaults to daemon_cache.ini in local dir")
 defaults["cachefile"] = "daemon_cache.ini"
 
+parser.add_option("--logfile", action="store", type="string", dest="logfile",
+        help="Log file to store logging from entire system, default: daemon.log")
+defaults["logfile"] = "daemon.log"
+
+parser.add_option("--loglevel", action="store", type="string", dest="loglevel",
+        help="Log level - ERROR, WARNING, DEBUG, or INFO, defaults to DEBUG")
+defaults["loglevel"] = "DEBUG"
 parser.set_defaults(**defaults)
 (options, args) = parser.parse_args()
 
 if __name__ == "__main__":
-    main(options.is_restarting, options.cachefile, options.port) 
+    main(options.is_restarting, options.cachefile, options.port,
+            options.logfile, options.loglevel) 

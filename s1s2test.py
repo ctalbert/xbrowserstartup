@@ -1,5 +1,8 @@
+import re
+import os
 import threading
 import androidutils
+from time import sleep
 from phonetest import PhoneTest
 
 class S1S2Test(PhoneTest):
@@ -16,6 +19,8 @@ class S1S2Test(PhoneTest):
         self._jobs.put_nowait(job)
 
     def start_test(self, stop=False):
+        # For Android, adb expects our serial number to be in upper case
+        self._serial = self._serial.swapcase()
         self.stop = stop
         self._thread = threading.Thread(target=self.runtests,
                 name=self._phoneid)
@@ -53,7 +58,7 @@ class S1S2Test(PhoneTest):
                         androidutils.run_adb("logcat", ["-c"], self._serial)
                         # Run test
                         androidutils.run_adb("shell",
-                                ["/mnt/sdcard/s1test/runbrowser.sh", intent,
+                                ["sh", "/mnt/sdcard/s1test/runbrowser.sh", intent,
                                     u], self._serial)
                         # Let browser stabilize
                         sleep(5)
@@ -63,6 +68,8 @@ class S1S2Test(PhoneTest):
                         self.publish_results(throbber=throbber, drawing=drawtime)
                         androidutils.kill_proc_sut(self._ip, self._sutcmdport,
                                 job["androidprocname"])
+                        androidutils.remove_sessionstore_files_adb(self._serial,
+                                procname=job["androidprocname"])
 
             else:
                 self._logger.error("Invalid job entry: %s" % job)
@@ -81,23 +88,27 @@ class S1S2Test(PhoneTest):
         self._iterations = 5
 
     def analyze_logcat(self):
+        import pdb
         buf = androidutils.run_adb("logcat", ["-d"], self._serial)
+        buf = buf.split('\r\n')
         throbberstartRE = re.compile(".*Throbber start$")
         throbberstopRE = re.compile(".*Throbber stop$")
         endDrawingRE = re.compile(".*endDrawing$")
         throbstart = 0
         throbstop = 0
         enddraw = 0
+
         for line in buf:
-            if line.match(throbberstartRE):
+            line = line.strip()
+            if throbberstartRE.match(line):
                 throbstart = line.split(' ')[-4]
-            elif line.match(throbberstopRE):
+            elif throbberstopRE.match(line):
                 throbstop = line.split(' ')[-4]
-            elif line.match(endDrawingRE):
+            elif endDrawingRE.match(line):
                 enddraw = line.split(' ')[-3]
         return (int(throbstop) - int(throbstart), int(enddraw))
 
-    def publish_results(throbber=0, drawing=0):
+    def publish_results(self, throbber=0, drawing=0):
         # TODO: Finish reporting
         msg = "Throbber time: %s EndDraw: %s" % (throbber, drawing)
         print msg

@@ -1,8 +1,15 @@
 import subprocess
 import os
 import logging
+from time import sleep
 import urllib
+import sys
+import ConfigParser
 import devicemanagerSUT
+
+# This code is meant to be used from threads, so make subprocess threadsafe in
+# a very hacky way, python: http://bugs.python.org/issue1731717
+subprocess._cleanup = lambda: None
 
 """
 install_build_sut - installs build on phone via sutagent
@@ -70,7 +77,8 @@ def install_build_adb(phoneid=None, url=None, procname="org.mozilla.fennec",
     if not phoneid or not url or not serial:
         print "You must specify a phoneid, url, and a serial number"
         return False
-
+    #import pdb
+    #pdb.set_trace()
     ret = True
 
     os.mkdir(phoneid)
@@ -82,13 +90,9 @@ def install_build_adb(phoneid=None, url=None, procname="org.mozilla.fennec",
         logging.error("Could not download build due to: %s %s" % sys.exc_info()[:2])
         ret = False
 
-    try:
-        o = run_adb("uninstall", [procname], serial)
-        print o
-    except:
-        logging.error("exception uninstalling %s %s" % sys.exc_info()[:2])
+    o = run_adb("uninstall", [procname], serial)
     if o.lower().find('success') == -1:
-        logging.error("Unable to uninstall application on phoneID: %s" %
+        logging.warn("Unable to uninstall application on phoneID: %s" %
                 phoneid)
         ret = False
 
@@ -97,6 +101,10 @@ def install_build_adb(phoneid=None, url=None, procname="org.mozilla.fennec",
     if o.lower().find('success') == -1:
         logging.error("Unable to install application on phoneID: %s" % phoneid)
         ret = False
+    else:
+        # It could be the case that the app wasn't installed so we might have
+        # failed to uninstall which would be ok
+        ret = True
 
     if os.path.exists(apkpath):
         os.remove(apkpath)
@@ -129,13 +137,13 @@ def run_adb(adbcmd, cmd, serial=None):
         logging.debug("adb cmd: %s" % subprocess.list2cmdline([adb, "-s", serial, adbcmd] + cmd))
         p = subprocess.Popen([adb, "-s", serial, adbcmd] + cmd,
                              stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT)
+                             stderr=subprocess.PIPE)
     else:
-        logging.debug("run adb cmd: %s" % subprocess.list2cmdline([self.adb,
+        logging.debug("run adb cmd: %s" % subprocess.list2cmdline([adb,
             adbcmd] + cmd))
         p = subprocess.Popen([adb, adbcmd] + cmd,
                              stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT)
+                             stderr=subprocess.PIPE)
     return p.communicate()[0]
 
 """
@@ -150,5 +158,57 @@ def kill_proc_sut(ip=None, port="20701", procname="org.mozilla.fennec"):
         print "You must specify an IP address to the phone"
         return False
 
-    dm = devicemanager.DeviceManagerSUT(ip, port)
+    dm = devicemanagerSUT.DeviceManagerSUT(ip, port)
     dm.killProcess(procname)
+
+def get_fennec_profile_path_adb(serial=None, procname=None):
+    if not serial:
+        print "You must specify a serial number for adb"
+        return None
+    logging.debug("Getting Fennec Profile Path")
+    path = "/data/data/" + procname + "/files/mozilla/profiles.ini"
+    data = run_adb("shell", ["cat", path], serial=serial)
+
+    if data == '':
+        return None
+
+    pfile = open("profiles.ini", "w")
+    pfile.writelines(data.split("\r"))
+    pfile.flush()
+    path = None
+    if os.path.exists("profiles.ini"):
+        cfg = ConfigParser.RawConfigParser()
+        cfg.read("profiles.ini")
+
+        if cfg.has_section("Profile0"):
+            isrelative = cfg.get("Profile0", "IsRelative")
+            profname = cfg.get("Profile0", "Path")
+        else:
+            logging.error("Unknown profile")
+
+        if isrelative == "1":
+            path = "/data/data/%s/files/mozilla/%s" % (procname,profname)
+        else:
+            path = profname
+        os.remove("profiles.ini")
+    return path
+
+def remove_sessionstore_files_adb(serial=None,
+                                  procname = None):
+    if not serial or not procname:
+        print "You must specify a serial number for adb and the app name"
+        return None
+
+    # Get the profile
+    fennec_profile = get_fennec_profile_path_adb(serial=serial,
+            procname=procname)
+
+    if fennec_profile:
+        sessionstorepth = fennec_profile + "/sessionstore.js"
+        run_adb("shell", ["rm", sessionstorepth], serial=serial)
+        sessionstorepth = fennec_profile + "/sessionstore.bak"
+        run_adb("shell", ["rm", sessionstorepth], serial=serial)
+    else:
+        # The first run doesn't have a profile so that's ok
+        logging.warn("No profile exists")
+

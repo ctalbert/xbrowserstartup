@@ -27,6 +27,8 @@ class S1S2Test(PhoneTest):
         self._thread.start()
 
     def runtests(self):
+        # Ensure we have a connection to the device
+        self.dm = DeviceManagerSUT(self._ip, self._sutcmdport)
         # Get our next job
         while 1:
             if self._jobs.empty() and self.stop:
@@ -56,6 +58,8 @@ class S1S2Test(PhoneTest):
                         self._set_status(msg="Run %s for url %s" % (i,u))
                         # Clear logcat
                         androidutils.run_adb("logcat", ["-c"], self._serial)
+                        # Get start time
+                        starttime = self.dm.getInfo('uptimemillis')['uptimemillis'][0]
                         # Run test
                         androidutils.run_adb("shell",
                                 ["sh", "/mnt/sdcard/s1test/runbrowser.sh", intent,
@@ -63,9 +67,12 @@ class S1S2Test(PhoneTest):
                         # Let browser stabilize
                         sleep(5)
                         # Get results
-                        throbber, drawtime = self.analyze_logcat()
+                        throbberstart, throbberstop, drawtime = self.analyze_logcat()
                         # Publish results
-                        self.publish_results(throbber=throbber, drawing=drawtime)
+                        self.publish_results(starttime=int(starttime),
+                                             tstrt=throbberstart,
+                                             tstop=throbberstop,
+                                             endrawing=drawtime)
                         androidutils.kill_proc_sut(self._ip, self._sutcmdport,
                                 job["androidprocname"])
                         androidutils.remove_sessionstore_files_adb(self._serial,
@@ -88,7 +95,6 @@ class S1S2Test(PhoneTest):
         self._iterations = 5
 
     def analyze_logcat(self):
-        import pdb
         buf = androidutils.run_adb("logcat", ["-d"], self._serial)
         buf = buf.split('\r\n')
         throbberstartRE = re.compile(".*Throbber start$")
@@ -106,11 +112,12 @@ class S1S2Test(PhoneTest):
                 throbstop = line.split(' ')[-4]
             elif endDrawingRE.match(line):
                 enddraw = line.split(' ')[-3]
-        return (int(throbstop) - int(throbstart), int(enddraw))
+        return (int(throbstart), int(throbstop), int(enddraw))
 
-    def publish_results(self, throbber=0, drawing=0):
+    def publish_results(self, starttime=0, tstrt=0, tstop=0, drawing=0):
         # TODO: Finish reporting
-        msg = "Throbber time: %s EndDraw: %s" % (throbber, drawing)
+        msg = "Start Time: %s Throbber Start: %s Throbber Stop: %s EndDraw: %s"
+        % (starttime, tstrt, tstop, drawing)
         print msg
         self._logger.info("RESULTS: %s:%s" % (self._phoneid, msg))
 

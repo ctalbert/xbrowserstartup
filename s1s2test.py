@@ -4,6 +4,7 @@ import threading
 import androidutils
 from time import sleep
 from phonetest import PhoneTest
+from devicemanagerSUT import DeviceManagerSUT
 
 class S1S2Test(PhoneTest):
     def __init__(self,
@@ -72,7 +73,7 @@ class S1S2Test(PhoneTest):
                         self.publish_results(starttime=int(starttime),
                                              tstrt=throbberstart,
                                              tstop=throbberstop,
-                                             endrawing=drawtime)
+                                             drawing=drawtime)
                         androidutils.kill_proc_sut(self._ip, self._sutcmdport,
                                 job["androidprocname"])
                         androidutils.remove_sessionstore_files_adb(self._serial,
@@ -116,8 +117,7 @@ class S1S2Test(PhoneTest):
 
     def publish_results(self, starttime=0, tstrt=0, tstop=0, drawing=0):
         # TODO: Finish reporting
-        msg = "Start Time: %s Throbber Start: %s Throbber Stop: %s EndDraw: %s"
-        % (starttime, tstrt, tstop, drawing)
+        msg = "Start Time: %s Throbber Start: %s Throbber Stop: %s EndDraw: %s" % (starttime, tstrt, tstop, drawing)
         print msg
         self._logger.info("RESULTS: %s:%s" % (self._phoneid, msg))
 

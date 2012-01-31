@@ -2,9 +2,14 @@ import re
 import os
 import threading
 import androidutils
+import ConfigParser
+import json
+import urllib2
 from time import sleep
 from phonetest import PhoneTest
 from devicemanagerSUT import DeviceManagerSUT
+
+CONFIG_FILE_PATH = os.path.join(os.getcwd(), "s1s2_settings.ini")
 
 class S1S2Test(PhoneTest):
     def __init__(self,
@@ -12,8 +17,9 @@ class S1S2Test(PhoneTest):
                  serial=None,
                  ip=None,
                  sutcmdport=None,
-                 sutdataport=None):
-        PhoneTest.__init__(self, phoneid, serial, ip, sutcmdport, sutdataport)
+                 sutdataport=None,
+                 osver=None):
+        PhoneTest.__init__(self, phoneid, serial, ip, sutcmdport, sutdataport, osver)
 
     def add_job(self, job):
         self._logger.info("s1s2test adding job: %s" % job)
@@ -39,48 +45,58 @@ class S1S2Test(PhoneTest):
             # This blocks until a job arrives
             job = self._jobs.get()
             self._logger.debug("Got job: %s" % job)
-            if "buildurl" in job:
-                androidutils.install_build_adb(phoneid = self._phoneid,
-                                               url=job["buildurl"],
-                                               procname = job["androidprocname"],
-                                               serial=self._serial)
+            if ("buildurl" not in job or "androidprocname" not in job or
+                "revision" not in job or "blddate" not in job or
+                "buildtype" not in job or "version" not in job):
+                self._logger.error("Invalid job configuration: %s" % job)
+                raise NameError("ERROR: Invalid job configuration: %s" % job)
+                
+            androidutils.install_build_adb(phoneid = self._phoneid,
+                                           url=job["buildurl"],
+                                           procname = job["androidprocname"],
+                                           serial=self._serial)
 
-                # Read our config file which gives us our number of
-                # iterations and urls that we will be testing
-                self.prepare_phone(job)
+            # Read our config file which gives us our number of
+            # iterations and urls that we will be testing
+            self.prepare_phone(job)
 
-                intent = job["androidprocname"] + "/.App"
+            intent = job["androidprocname"] + "/.App"
 
-                for u in self._urls:
-                    self._logger.info("Running url %s for %s iterations" %
-                            (u, self._iterations))
-                    for i in range(self._iterations):
-                        # Set status
-                        self._set_status(msg="Run %s for url %s" % (i,u))
-                        # Clear logcat
-                        androidutils.run_adb("logcat", ["-c"], self._serial)
-                        # Get start time
-                        starttime = self.dm.getInfo('uptimemillis')['uptimemillis'][0]
-                        # Run test
-                        androidutils.run_adb("shell",
-                                ["sh", "/mnt/sdcard/s1test/runbrowser.sh", intent,
-                                    u], self._serial)
-                        # Let browser stabilize
-                        sleep(5)
-                        # Get results
-                        throbberstart, throbberstop, drawtime = self.analyze_logcat()
-                        # Publish results
-                        self.publish_results(starttime=int(starttime),
-                                             tstrt=throbberstart,
-                                             tstop=throbberstop,
-                                             drawing=drawtime)
-                        androidutils.kill_proc_sut(self._ip, self._sutcmdport,
-                                job["androidprocname"])
-                        androidutils.remove_sessionstore_files_adb(self._serial,
-                                procname=job["androidprocname"])
+            for u in self._urls:
+                self._logger.info("Running url %s for %s iterations" %
+                        (u, self._iterations))
+                for i in range(self._iterations):
+                    # Set status
+                    self._set_status(msg="Run %s for url %s" % (i,u))
 
-            else:
-                self._logger.error("Invalid job entry: %s" % job)
+                    # Clear logcat
+                    androidutils.run_adb("logcat", ["-c"], self._serial)
+
+                    # Get start time
+                    starttime = self.dm.getInfo('uptimemillis')['uptimemillis'][0]
+
+                    # Run test
+                    androidutils.run_adb("shell",
+                            ["sh", "/mnt/sdcard/s1test/runbrowser.sh", intent,
+                                u], self._serial)
+
+                    # Let browser stabilize
+                    sleep(5)
+
+                    # Get results
+                    throbberstart, throbberstop, drawtime = self.analyze_logcat()
+
+                    # Publish results
+                    self.publish_results(starttime=int(starttime),
+                                         tstrt=throbberstart,
+                                         tstop=throbberstop,
+                                         drawing=drawtime,
+                                         job = job,
+                                         url = u)
+                    androidutils.kill_proc_sut(self._ip, self._sutcmdport,
+                            job["androidprocname"])
+                    androidutils.remove_sessionstore_files_adb(self._serial,
+                            procname=job["androidprocname"])
 
             self._jobs.task_done()
             self._logger.debug("Finished job: %s" % job)
@@ -92,9 +108,31 @@ class S1S2Test(PhoneTest):
         androidutils.run_adb("push", ["runbrowser.sh",
             "/mnt/sdcard/s1test/"], self._serial)
 
-        self._urls = ["http://google.com"]
-        self._iterations = 5
+        testroot = "/mnt/sdcard/s1test"
+        
+        if not os.path.exists(CONFIG_FILE_PATH):
+            self._logger.error("Cannot find config file: %s" % CONFIG_FILE_PATH)
+            raise NameError("Cannot find config file: %s" % CONFIG_FILE_PATH)
+        
+        cfg = ConfigParser.RawConfigParser()
+        cfg.read(CONFIG_FILE_PATH)
+        
+        # Map URLS - {urlname: url} - urlname serves as testname
+        self._urls = {}
+        for u in cfg.items("urls"):
+            self._urls[u[0]] = u[1]
 
+        # Move the local html files in htmlfiles onto the phone's sdcard
+        # Copy our HTML files for local use into place
+        # TODO: Handle errors       
+        for h in cfg.items("htmlfiles"):
+            androidutils.run_adb("push", [h[1], testroot + "/%s" % h[1]], self._serial)
+        
+        self._iterations = cfg.getint("settings", "iterations")
+        self._resulturl = cfg.get("settings", "resulturl")
+        
+        
+ 
     def analyze_logcat(self):
         buf = androidutils.run_adb("logcat", ["-d"], self._serial)
         buf = buf.split('\r\n')
@@ -115,11 +153,47 @@ class S1S2Test(PhoneTest):
                 enddraw = line.split(' ')[-3]
         return (int(throbstart), int(throbstop), int(enddraw))
 
-    def publish_results(self, starttime=0, tstrt=0, tstop=0, drawing=0):
-        # TODO: Finish reporting
+    def publish_results(self, starttime=0, tstrt=0, tstop=0, drawing=0, job=None, url = ''):
         msg = "Start Time: %s Throbber Start: %s Throbber Stop: %s EndDraw: %s" % (starttime, tstrt, tstop, drawing)
-        print msg
+        print "RESULTS %s:%s" % (self._phoneid, msg)
         self._logger.info("RESULTS: %s:%s" % (self._phoneid, msg))
+        
+        # Create JSON to send to webserver
+        resultdata = {}
+        resultdata["phoneid"] = self._phoneid
+        resultdata["testname"] = url
+        resultdata["throbberstart"] = tstrt
+        resultdata["throbberstop"] = tstop
+        resultdata["enddrawing"] = drawing
+        
+        # Accept either YYYY-mm-dd or YYYY-mm-ddTHH:MM:SS for blddate stamps
+        # TODO: Enforce these formats and throw errors if not found
+        dt = job["blddate"].split("T")
+        if len(dt) == 1:
+            # YYYY-mm-dd format
+            resultdata["blddate"] = "%sT%s", (job["blddate"], "00:00:00")
+        else:
+            resultdata["blddate"] = job["blddate"]
+        
+        resultdata["revision"] = job["revision"]
+        resultdata["productname"] = job["androidprocname"]
+        resultdata["productversion"] = job["version"]
+        resultdata["osver"] = self._osver
+        
+        # Upload
+        result = json.dumps({"data": resultdata})
+        req = urllib2.Request(self._resulturl, result, {'Content-Type': 'application/json'})
+        f = urllib2.urlopen(req)
+        response = f.read()
+        f.close()
+        
+        
+        
+        
+        
+        
+        
+        
 
 
 

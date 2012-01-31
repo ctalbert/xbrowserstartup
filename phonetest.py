@@ -12,6 +12,7 @@ class PhoneTest:
     ip = phone's IP address (where sutagent running if it is running)
     sutcmdport = cmd port of sutagent if it is running
     sutdataport = data port of sutagent if it is running
+    osver = version string of phone OS
     TODO: Add in connection data here for programmable power so we can add a
     powercycle method to this class.
     """
@@ -20,7 +21,8 @@ class PhoneTest:
                  serial=None,
                  ip=None,
                  sutcmdport=None,
-                 sutdataport=None):
+                 sutdataport=None,
+                 osver=None):
         print "This is the initialization function"
         self._jobs = Queue.Queue()
         self._phoneid = phoneid
@@ -28,6 +30,7 @@ class PhoneTest:
         self._ip = ip
         self._sutcmdport = sutcmdport
         self._sutdataport = sutdataport
+        self._osver = osver
         self._logger = logging.getLogger('phonetest')
         self._status = {'timestamp': datetime.now().isoformat(),
                         'online': True, 'msg': 'Initialized'}

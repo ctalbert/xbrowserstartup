@@ -18,8 +18,9 @@ class S1S2Test(PhoneTest):
                  ip=None,
                  sutcmdport=None,
                  sutdataport=None,
+                 machinetype=None,
                  osver=None):
-        PhoneTest.__init__(self, phoneid, serial, ip, sutcmdport, sutdataport, osver)
+        PhoneTest.__init__(self, phoneid, serial, ip, sutcmdport, sutdataport, machinetype, osver)
 
     def add_job(self, job):
         self._logger.info("s1s2test adding job: %s" % job)
@@ -47,7 +48,7 @@ class S1S2Test(PhoneTest):
             self._logger.debug("Got job: %s" % job)
             if ("buildurl" not in job or "androidprocname" not in job or
                 "revision" not in job or "blddate" not in job or
-                "buildtype" not in job or "version" not in job):
+                "bldtype" not in job or "version" not in job):
                 self._logger.error("Invalid job configuration: %s" % job)
                 raise NameError("ERROR: Invalid job configuration: %s" % job)
                 
@@ -62,12 +63,12 @@ class S1S2Test(PhoneTest):
 
             intent = job["androidprocname"] + "/.App"
 
-            for u in self._urls:
-                self._logger.info("Running url %s for %s iterations" %
-                        (u, self._iterations))
+            for testname,url in self._urls.iteritems():
+                self._logger.info("Running test %s for %s iterations" %
+                        (testname, self._iterations))
                 for i in range(self._iterations):
                     # Set status
-                    self._set_status(msg="Run %s for url %s" % (i,u))
+                    self._set_status(msg="Run %s for url %s" % (i,url))
 
                     # Clear logcat
                     androidutils.run_adb("logcat", ["-c"], self._serial)
@@ -78,7 +79,7 @@ class S1S2Test(PhoneTest):
                     # Run test
                     androidutils.run_adb("shell",
                             ["sh", "/mnt/sdcard/s1test/runbrowser.sh", intent,
-                                u], self._serial)
+                                url], self._serial)
 
                     # Let browser stabilize
                     sleep(5)
@@ -92,7 +93,7 @@ class S1S2Test(PhoneTest):
                                          tstop=throbberstop,
                                          drawing=drawtime,
                                          job = job,
-                                         url = u)
+                                         testname = testname)
                     androidutils.kill_proc_sut(self._ip, self._sutcmdport,
                             job["androidprocname"])
                     androidutils.remove_sessionstore_files_adb(self._serial,
@@ -153,7 +154,7 @@ class S1S2Test(PhoneTest):
                 enddraw = line.split(' ')[-3]
         return (int(throbstart), int(throbstop), int(enddraw))
 
-    def publish_results(self, starttime=0, tstrt=0, tstop=0, drawing=0, job=None, url = ''):
+    def publish_results(self, starttime=0, tstrt=0, tstop=0, drawing=0, job=None, testname = ''):
         msg = "Start Time: %s Throbber Start: %s Throbber Stop: %s EndDraw: %s" % (starttime, tstrt, tstop, drawing)
         print "RESULTS %s:%s" % (self._phoneid, msg)
         self._logger.info("RESULTS: %s:%s" % (self._phoneid, msg))
@@ -161,7 +162,8 @@ class S1S2Test(PhoneTest):
         # Create JSON to send to webserver
         resultdata = {}
         resultdata["phoneid"] = self._phoneid
-        resultdata["testname"] = url
+        resultdata["testname"] = testname
+        resultdata["starttime"] = starttime
         resultdata["throbberstart"] = tstrt
         resultdata["throbberstop"] = tstop
         resultdata["enddrawing"] = drawing
@@ -171,7 +173,7 @@ class S1S2Test(PhoneTest):
         dt = job["blddate"].split("T")
         if len(dt) == 1:
             # YYYY-mm-dd format
-            resultdata["blddate"] = "%sT%s", (job["blddate"], "00:00:00")
+            resultdata["blddate"] = "%sT%s" % (job["blddate"], "00:00:00")
         else:
             resultdata["blddate"] = job["blddate"]
         
@@ -179,6 +181,8 @@ class S1S2Test(PhoneTest):
         resultdata["productname"] = job["androidprocname"]
         resultdata["productversion"] = job["version"]
         resultdata["osver"] = self._osver
+        resultdata["bldtype"] = job["bldtype"]
+        resultdata["machineid"] = self._machinetype
         
         # Upload
         result = json.dumps({"data": resultdata})

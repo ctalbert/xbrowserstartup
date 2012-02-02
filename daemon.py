@@ -15,6 +15,7 @@ import traceback
 import uuid
 from pulsebuildmonitor import start_pulse_monitor
 from devicemanager import NetworkTools
+from devicemanagerSUT import DeviceManagerSUT
 
 # Objects that conform to test object interface
 # TODO: refactor this one: import runstartuptest
@@ -154,7 +155,9 @@ class Daemon():
         t = S1S2Test(phoneid=macaddy + "_" + phonedict['name'],
                      serial = phonedict['serial'],
                      ip = phonedict['ip'],
-                     sutcmdport = phonedict['port'])
+                     sutcmdport = phonedict['port'],
+                     machinetype = phonedict['name'],
+                     osver = phonedict['os'])
         return t
 
     def register_device(self, data):
@@ -167,17 +170,17 @@ class Daemon():
         # Lock down so we write to cache safely
         self._cachelock.acquire()
         logging.debug("Obtained cachelock for registering: %s" % data)
-
         try:
             # Map MAC Address to ip and user name for phone
             # The configparser does odd things with the :'s so remove them.
             macaddy = data['name'][0].replace(':', '_')
 
             if macaddy not in self._phonemap:
-                self._phonemap[macaddy] = {'ip': data['ipaddr'][0],
+                self._phonemap[macaddy] = {'ip': '10.250.4.219',#data['ipaddr'][0],
                                            'name': data['hardware'][0],
                                            'port': data['cmdport'][0],
-                                           'serial': data['pool'][0]}
+                                           'serial': data['pool'][0],
+                                           'os': data['os'][0]}
                 testobj = self._create_test_object(macaddy, self._phonemap[macaddy])
                 self._phonemap[macaddy]["testobj"] = testobj
 
@@ -187,10 +190,11 @@ class Daemon():
                 if not cfg.has_section("phones"):
                     cfg.add_section("phones")
 
-                values = "%s,%s,%s,%s" % (self._phonemap[macaddy]['ip'],
+                values = "%s,%s,%s,%s,%s" % (self._phonemap[macaddy]['ip'],
                                           self._phonemap[macaddy]['name'],
                                           self._phonemap[macaddy]['port'],
-                                          self._phonemap[macaddy]['serial'])
+                                          self._phonemap[macaddy]['serial'],
+                                          self._phonemap[macaddy]['os'])
                 logging.debug("Registering new phone: %s" % values)
                 cfg.set("phones", macaddy, values)
                 cfg.write(open(self._cache, 'wb'))
@@ -218,7 +222,8 @@ class Daemon():
                 self._phonemap[i[0]] = {"ip": vlist[0],
                                         "name": vlist[1],
                                         "port": vlist[2],
-                                        "serial": vlist[3]}
+                                        "serial": vlist[3],
+                                        "os": vlist[4]}
                 testobj = self._create_test_object(i[0], self._phonemap[i[0]])
                 self._phonemap[i[0]]["testobj"] = testobj
 
@@ -255,10 +260,11 @@ class Daemon():
             logging.info("Rebooting %s:%s" % (k, v["name"]))
 
             try:
-                dm = devicemanagerSUT.DeviceManagerSUT(v["ip"],v["port"])
+                dm = DeviceManagerSUT(v["ip"],v["port"])
                 dm.reboot(myip)
             except:
                 logging.error("COULD NOT REBOOT PHONE: %s:%s" % (k, v["name"]))
+                logging.error("exception: %s %s" % sys.exc_info()[:2])
 
     def on_build(self, msg):
         # Use the msg to get the build and install it then kick off our tests

@@ -23,7 +23,7 @@ class S1S2Test(PhoneTest):
         PhoneTest.__init__(self, phoneid, serial, ip, sutcmdport, sutdataport, machinetype, osver)
 
     def add_job(self, job):
-        self._logger.info("s1s2test adding job: %s" % job)
+        self._logger.info("%s: s1s2test adding job: %s" % (self._phoneid,job))
         self._jobs.put_nowait(job)
 
     def start_test(self, stop=False):
@@ -64,8 +64,8 @@ class S1S2Test(PhoneTest):
             intent = job["androidprocname"] + "/.App"
 
             for testname,url in self._urls.iteritems():
-                self._logger.info("Running test %s for %s iterations" %
-                        (testname, self._iterations))
+                self._logger.info("%s: Running test %s for %s iterations" %
+                        (self._phoneid, testname, self._iterations))
                 for i in range(self._iterations):
                     # Set status
                     self._set_status(msg="Run %s for url %s" % (i,url))
@@ -167,15 +167,7 @@ class S1S2Test(PhoneTest):
         resultdata["throbberstart"] = tstrt
         resultdata["throbberstop"] = tstop
         resultdata["enddrawing"] = drawing
-        
-        # Accept either YYYY-mm-dd or YYYY-mm-ddTHH:MM:SS for blddate stamps
-        # TODO: Enforce these formats and throw errors if not found
-        dt = job["blddate"].split("T")
-        if len(dt) == 1:
-            # YYYY-mm-dd format
-            resultdata["blddate"] = "%sT%s" % (job["blddate"], "00:00:00")
-        else:
-            resultdata["blddate"] = job["blddate"]
+        resultdata["blddate"] = job["blddate"]
         
         resultdata["revision"] = job["revision"]
         resultdata["productname"] = job["androidprocname"]

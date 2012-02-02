@@ -176,7 +176,7 @@ class Daemon():
             macaddy = data['name'][0].replace(':', '_')
 
             if macaddy not in self._phonemap:
-                self._phonemap[macaddy] = {'ip': '10.250.4.219',#data['ipaddr'][0],
+                self._phonemap[macaddy] = {'ip': data['ipaddr'][0],
                                            'name': data['hardware'][0],
                                            'port': data['cmdport'][0],
                                            'serial': data['pool'][0],

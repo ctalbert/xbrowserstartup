@@ -81,8 +81,9 @@ class S1S2Test(PhoneTest):
                             ["sh", "/mnt/sdcard/s1test/runbrowser.sh", intent,
                                 url], self._serial)
 
-                    # Let browser stabilize
-                    sleep(5)
+                    # Let browser stabilize - this was 5s but that wasn't long
+                    # enough for the device to stabilize on slow devices
+                    sleep(10)
 
                     # Get results
                     throbberstart, throbberstop, drawtime = self.analyze_logcat()
